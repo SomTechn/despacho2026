@@ -554,6 +554,10 @@ input,select,textarea{font-family:'Barlow',sans-serif;}
     <div class="fg"><label class="fl">Contraseña</label><input type="password" id="auth-pwd" class="fi" placeholder="••••••••" onkeydown="if(event.key==='Enter')doLogin()"></div>
     <div id="auth-err" style="color:var(--rojo);font-size:12px;margin-bottom:10px;display:none;"></div>
     <button class="btn btn-primary" style="width:100%;justify-content:center;padding:12px" onclick="doLogin()">Ingresar</button>
+    <div style="text-align:center;margin-top:12px">
+      <a href="#" onclick="event.preventDefault();pedirResetPassword()"
+         style="color:var(--td);font-size:11px;text-decoration:none">¿Olvidaste tu contraseña?</a>
+    </div>
   </div>
 </div>
 
@@ -704,7 +708,8 @@ input,select,textarea{font-family:'Barlow',sans-serif;}
       <div class="user-chip">
         <div class="u-av" id="u-av">D</div>
         <div><div class="u-name" id="u-name">Despacho</div><div class="u-role">Operador</div></div>
-        <button onclick="doLogout()" style="margin-left:auto;background:none;border:none;color:var(--td);font-size:18px;cursor:pointer" title="Cerrar sesión">⏻</button>
+        <button onclick="abrirModalPwd()" style="margin-left:auto;background:none;border:none;color:var(--td);font-size:15px;cursor:pointer" title="Cambiar mi contraseña">🔑</button>
+        <button onclick="doLogout()" style="background:none;border:none;color:var(--td);font-size:18px;cursor:pointer" title="Cerrar sesión">⏻</button>
       </div>
     </div>
   </div>
@@ -1867,6 +1872,13 @@ async function doLogout() {
 // Check session on load
 sb.auth.getSession().then(({ data: { session } }) => {
   if(!session) return; // show auth screen
+  // Si venimos del link de recuperación, no arrancar el panel:
+  // solo mostrar el modal para fijar la nueva contraseña.
+  if(location.hash.startsWith('#reset')) {
+    document.getElementById('auth-screen').style.display = 'none';
+    abrirModalPwd(true);
+    return;
+  }
   sb.from('perfiles').select('rol,nombre').eq('id', session.user.id).single().then(({ data: p }) => {
     if(p && ['STAFF','ADMIN'].includes(p.rol)) {
       document.getElementById('auth-screen').style.display = 'none';
@@ -8063,6 +8075,102 @@ window.addEventListener('popstate', e => {
     if(sel && sel._ssWrap) refrescarBtn(sel,sel._ssWrap);
   };
 })();
+</script>
+
+<!-- ═══ CONTRASEÑA (cambio propio + recuperación) ═════════════ -->
+<div id="modal-pwd" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:600;align-items:center;justify-content:center;padding:16px;" onclick="if(event.target===this)cerrarModalPwd()">
+  <div style="background:var(--g1);border:1px solid var(--g4);border-radius:18px;width:100%;max-width:420px;overflow:hidden;display:flex;flex-direction:column;">
+    <div style="padding:16px 20px;border-bottom:1px solid var(--g4);display:flex;justify-content:space-between;align-items:center">
+      <div style="font-size:16px;font-weight:800">🔑 Cambiar contraseña</div>
+      <button onclick="cerrarModalPwd()" style="background:none;border:none;color:var(--td);font-size:22px;cursor:pointer;padding:0 4px">✕</button>
+    </div>
+    <div style="padding:20px">
+      <div class="fg"><label class="fl">Nueva contraseña *</label>
+        <input class="fi" id="pwd-new" type="password" placeholder="Mínimo 8 caracteres" autocomplete="new-password"></div>
+      <div class="fg"><label class="fl">Confirmar contraseña *</label>
+        <input class="fi" id="pwd-new2" type="password" placeholder="Repite la contraseña" autocomplete="new-password"
+          onkeydown="if(event.key==='Enter')guardarMiPassword()"></div>
+      <div id="pwd-msg" style="font-size:12px;margin-top:6px;display:none"></div>
+    </div>
+    <div style="padding:14px 20px;border-top:1px solid var(--g4);display:flex;gap:8px;justify-content:flex-end">
+      <button onclick="cerrarModalPwd()" class="btn btn-ghost">Cancelar</button>
+      <button id="pwd-btn" onclick="guardarMiPassword()" class="btn btn-primary">💾 Guardar</button>
+    </div>
+  </div>
+</div>
+<script>
+// ─── A) Cambiar la propia contraseña (requiere sesión activa) ───
+var _pwdModoReset = false;   // true cuando se llega desde el link del correo
+
+function abrirModalPwd(modoReset){
+  _pwdModoReset = !!modoReset;
+  document.getElementById('pwd-new').value  = '';
+  document.getElementById('pwd-new2').value = '';
+  const m = document.getElementById('pwd-msg'); m.style.display='none';
+  document.getElementById('modal-pwd').style.display = 'flex';
+  setTimeout(()=>document.getElementById('pwd-new').focus(), 50);
+}
+function cerrarModalPwd(){
+  document.getElementById('modal-pwd').style.display = 'none';
+  // Si venía del link de recuperación, limpiar el hash para no reabrirlo
+  if(_pwdModoReset && location.hash.startsWith('#reset')) location.hash = '';
+  _pwdModoReset = false;
+}
+function pwdMsg(txt, ok){
+  const m = document.getElementById('pwd-msg');
+  m.textContent = txt;
+  m.style.color = ok ? 'var(--verde)' : 'var(--rojo)';
+  m.style.display = 'block';
+}
+async function guardarMiPassword(){
+  const p1 = document.getElementById('pwd-new').value;
+  const p2 = document.getElementById('pwd-new2').value;
+  if(p1.length < 8)  { pwdMsg('La contraseña debe tener al menos 8 caracteres'); return; }
+  if(p1 !== p2)      { pwdMsg('Las contraseñas no coinciden'); return; }
+  const btn = document.getElementById('pwd-btn');
+  btn.disabled = true; btn.textContent = '⏳ Guardando...';
+  const { error } = await sb.auth.updateUser({ password: p1 });
+  btn.disabled = false; btn.textContent = '💾 Guardar';
+  if(error){ pwdMsg('Error: ' + error.message); return; }
+  pwdMsg('✅ Contraseña actualizada', true);
+  const eraReset = _pwdModoReset;
+  setTimeout(()=>{
+    cerrarModalPwd();
+    if(typeof toast === 'function') toast('✅ Contraseña actualizada');
+    // Tras un reset por correo, forzar login limpio con la nueva clave
+    if(eraReset) doLogout();
+  }, 900);
+}
+
+// ─── B) Recuperación de contraseña (sin sesión, desde el login) ───
+async function pedirResetPassword(){
+  const email = document.getElementById('auth-email').value.trim();
+  const err   = document.getElementById('auth-err');
+  if(!email){
+    err.textContent = 'Escribe tu correo arriba y vuelve a pulsar el enlace';
+    err.style.color = 'var(--rojo)'; err.style.display = 'block';
+    return;
+  }
+  const { error } = await sb.auth.resetPasswordForEmail(email, {
+    redirectTo: location.origin + location.pathname + '#reset'
+  });
+  // No se revela si el correo existe o no (evita enumerar usuarios)
+  err.textContent = error
+    ? 'Error: ' + error.message
+    : '✅ Si el correo está registrado, recibirás un enlace de recuperación.';
+  err.style.color = error ? 'var(--rojo)' : 'var(--verde)';
+  err.style.display = 'block';
+}
+
+// ─── Detectar el regreso desde el link del correo ───
+// Supabase deja la sesión de recuperación y dispara PASSWORD_RECOVERY.
+sb.auth.onAuthStateChange((evento)=>{
+  if(evento === 'PASSWORD_RECOVERY'){
+    const a = document.getElementById('auth-screen');
+    if(a) a.style.display = 'none';
+    abrirModalPwd(true);
+  }
+});
 </script>
 
 </body>
