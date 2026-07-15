@@ -1001,25 +1001,6 @@ input,select,textarea{font-family:'Barlow',sans-serif;}
               <input type="tel" id="f-cli-tel" class="fi" placeholder="9999-9999">
             </div>
 
-            <!-- Ciudad -->
-            <div class="fg">
-              <label class="fl">Ciudad</label>
-              <select id="f-ciudad" class="fi" onchange="wizCiudadCambio()">
-                <option value="CHOLOMA">CHOLOMA</option>
-                <option value="SAN PEDRO SULA">SAN PEDRO SULA</option>
-                <option value="LA LIMA">LA LIMA</option>
-                <option value="VILLANUEVA">VILLANUEVA</option>
-              </select>
-            </div>
-
-            <!-- Ubicaciones guardadas del cliente -->
-            <div class="fg" id="cli-ubics-grp" style="display:none;grid-column:1/-1">
-              <label class="fl">Dirección de entrega guardada</label>
-              <select id="f-cli-ubic" class="fi" onchange="wizSeleccionarUbicCli()">
-                <option value="">Ingresar dirección manual...</option>
-              </select>
-            </div>
-
           </div>
           <div class="wiz-footer">
             <button class="btn btn-primary" onclick="wizGo(1)">Siguiente →</button>
@@ -1163,6 +1144,17 @@ input,select,textarea{font-family:'Barlow',sans-serif;}
             <div class="fg" style="grid-column:1/-1">
               <label class="fl">Dirección de entrega</label>
               <input type="text" id="f-dir-ent" class="fi" placeholder="Colonia, calle, referencias...">
+            </div>
+
+            <!-- Ciudad de destino: se autocompleta con la dirección seleccionada -->
+            <div class="fg">
+              <label class="fl">Ciudad de entrega</label>
+              <select id="f-ciudad" class="fi" onchange="wizCiudadCambio()">
+                <option value="CHOLOMA">CHOLOMA</option>
+                <option value="SAN PEDRO SULA">SAN PEDRO SULA</option>
+                <option value="LA LIMA">LA LIMA</option>
+                <option value="VILLANUEVA">VILLANUEVA</option>
+              </select>
             </div>
 
             <!-- GPS con mini mapa -->
@@ -4611,7 +4603,6 @@ async function guardarPedido() {
   document.getElementById('grp-productos-wiz').style.display='none';
   const carritoReset=document.getElementById('wiz-carrito'); if(carritoReset) carritoReset.style.display='none';
   const searchReset=document.getElementById('wiz-prod-search'); if(searchReset) searchReset.value='';
-  document.getElementById('cli-ubics-grp').style.display='none';
   document.getElementById('ent-ubics-grp').style.display='none';
   // Limpiar mini mapas
   ['wiz-rec-minimapa','wiz-ent-minimapa'].forEach(id=>{
@@ -4728,7 +4719,9 @@ function wizSelCliente(c, tipo='cli') {
   _wizCliSel = {...c, _tipo: tipo};
   document.getElementById('f-cli-nom').value   = c.nombre;
   document.getElementById('f-cli-tel').value   = c.celular||c.telefono||c.whatsapp||'';
-  if(c.ciudad) document.getElementById('f-ciudad').value = c.ciudad;
+  // Ciudad de destino por defecto según el cliente; la dirección de entrega
+  // seleccionada en el paso 3 la sobrescribe si corresponde.
+  if(c.ciudad) { const elC = document.getElementById('f-ciudad'); if(elC) elC.value = c.ciudad; }
   document.getElementById('cli-dropdown').style.display='none';
   // Chip
   document.getElementById('cli-sel-nombre').textContent = c.nombre;
@@ -4759,41 +4752,22 @@ function wizLimpiarCliente() {
     const el=document.getElementById(id); if(el) el.value='';
   });
   document.getElementById('cli-seleccionado').style.display='none';
-  document.getElementById('cli-ubics-grp').style.display='none';
   document.getElementById('ent-ubics-grp').style.display='none';
 }
 
 async function wizCargarUbicsCli(clienteId) {
   const {data} = await sb.from('ubicaciones_cliente').select('*')
     .eq('cliente_id',clienteId).order('es_principal',{ascending:false});
-  // Selector en paso 0
-  const grp0 = document.getElementById('cli-ubics-grp');
-  const sel0 = document.getElementById('f-cli-ubic');
-  // Selector en paso 2 (entrega)
+  // Selector de dirección guardada — vive solo en el paso de Entrega
   const grp2 = document.getElementById('ent-ubics-grp');
   const sel2 = document.getElementById('f-ent-ubic');
-  if(!data?.length) { if(grp0) grp0.style.display='none'; if(grp2) grp2.style.display='none'; return; }
+  if(!data?.length) { if(grp2) grp2.style.display='none'; return; }
   const opts = '<option value="">Ingresar dirección manual...</option>' +
     data.map(u=>`<option value="${u.id}"
       data-dir="${u.direccion||''}" data-col="${u.colonia||''}"
       data-gps="${u.ubicacion_gps||''}" data-ciudad="${u.ciudad||''}"
       >${u.es_principal?'⭐':''} ${u.nombre} — ${u.direccion||u.colonia||''}</option>`).join('');
-  if(grp0 && sel0) { grp0.style.display='block'; sel0.innerHTML=opts; }
   if(grp2 && sel2) { grp2.style.display='block'; sel2.innerHTML=opts; }
-}
-
-function wizSeleccionarUbicCli() {
-  const sel = document.getElementById('f-cli-ubic');
-  const opt = sel?.options[sel.selectedIndex];
-  if(!opt?.value) return;
-  // Rellenar en paso 2
-  const dir = document.getElementById('f-dir-ent');
-  const gps = document.getElementById('f-gps-ent');
-  const ciudad = document.getElementById('f-ciudad');
-  if(dir) dir.value = [opt.dataset.col,opt.dataset.dir].filter(Boolean).join(', ');
-  if(gps && opt.dataset.gps) { gps.value=opt.dataset.gps; ubiAutodetectarZona(opt.dataset.gps,'wiz-ent'); }
-  if(ciudad && opt.dataset.ciudad) ciudad.value = opt.dataset.ciudad;
-  wizCalcularTarifa();
 }
 
 function wizSeleccionarUbicEnt() {
@@ -4802,8 +4776,11 @@ function wizSeleccionarUbicEnt() {
   if(!opt?.value) return;
   const dir = document.getElementById('f-dir-ent');
   const gps = document.getElementById('f-gps-ent');
+  const ciudad = document.getElementById('f-ciudad');
   if(dir) dir.value = [opt.dataset.col,opt.dataset.dir].filter(Boolean).join(', ');
   if(gps && opt.dataset.gps) { gps.value=opt.dataset.gps; ubiAutodetectarZona(opt.dataset.gps,'wiz-ent'); }
+  // La ciudad de destino la determina la dirección seleccionada
+  if(ciudad && opt.dataset.ciudad) ciudad.value = opt.dataset.ciudad;
   wizCalcularTarifa();
 }
 
@@ -5893,8 +5870,8 @@ function ubiAutodetectarZona(gpsStr, prefijo='ubi') {
   if(zona) {
     // Mapeo de IDs: algunos prefijos usan IDs diferentes
     const idMap = {
-      'wiz-ent': { colonia: null,       ciudad: 'f-ciudad',  zona: null },
-      'wiz-rec': { colonia: null,       ciudad: 'f-ciudad',  zona: null },
+      'wiz-ent': { colonia: null,       ciudad: 'f-ciudad',      zona: null },
+      'wiz-rec': { colonia: null,       ciudad: 'f-ciudad-rec',  zona: null },
       'ubi':     { colonia: 'ubi-colonia', ciudad: 'ubi-ciudad', zona: 'ubi-zona' },
     };
     const ids = idMap[prefijo] || { colonia: prefijo+'-colonia', ciudad: prefijo+'-ciudad', zona: prefijo+'-zona' };
