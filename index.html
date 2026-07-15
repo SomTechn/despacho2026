@@ -1913,7 +1913,7 @@ async function init() {
   // Badge comprobantes pendientes
   sb.from('pedidos').select('id',{count:'exact',head:true}).eq('eliminado',false).in('metodo_pago',['TRANSFERENCIA','TARJETA']).eq('estatus','FINALIZADO').is('transferencia_validada_por',null).then(({count})=>{ const b=document.getElementById('badge-comp');if(b&&count>0){b.textContent=count;b.style.display='inline';} });
   // Badge liquidaciones pendientes
-  sb.from('liquidaciones_delivery').select('id',{count:'exact'}).eq('estatus','PENDIENTE').then(({count})=>{ if(count>0){const b=document.getElementById('badge-liq');if(b){b.textContent=count;b.style.display='inline';}} });
+  sb.from('liquidaciones_delivery').select('id',{count:'exact'}).eq('eliminado',false).eq('estatus','PENDIENTE').then(({count})=>{ if(count>0){const b=document.getElementById('badge-liq');if(b){b.textContent=count;b.style.display='inline';}} });
   // Badge solicitudes de comercios pendientes
   sb.from('solicitudes_comercios').select('id',{count:'exact',head:true}).eq('estatus','PENDIENTE').then(({count})=>{ const b=document.getElementById('badge-solcom');if(b&&count>0){b.textContent=count;b.style.display='inline';} }).catch(()=>{});
   initRealtime();
@@ -6138,6 +6138,7 @@ async function cargarLiquidaciones(estatus='PENDIENTE') {
   el.innerHTML='<div class="empty">Cargando...</div>';
   const {data,error}=await sb.from('liquidaciones_delivery')
     .select('*,delivery(nombre,celular,cuenta_bancaria,banco)')
+    .eq('eliminado',false)
     .eq('estatus',estatus).order('creado_at',{ascending:false});
   if(error){el.innerHTML='<div class="empty">Error: '+error.message+'</div>';return;}
   if(!data?.length){el.innerHTML='<div class="empty">Sin liquidaciones '+estatus.toLowerCase()+'s</div>';return;}
@@ -8239,4 +8240,4 @@ sb.auth.onAuthStateChange((evento)=>{
 </script>
 
 </body>
-</html>
+</html>s
