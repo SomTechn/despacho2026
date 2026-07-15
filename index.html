@@ -906,6 +906,7 @@ input,select,textarea{font-family:'Barlow',sans-serif;}
           <button class="fbtn" onclick="filtPed(this,'BORRADOR')">Borrador</button>
           <button class="fbtn" onclick="filtPed(this,'FINALIZADO')">Finalizados</button>
           <button class="fbtn" onclick="filtPed(this,'CANCELADO')">Cancelados</button>
+          <button class="fbtn" id="fbtn-papelera" style="display:none;color:var(--rojo)" onclick="filtPed(this,'eliminados')">🗑 Papelera</button>
         </div>
         <!-- Filtros avanzados -->
         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:10px;padding:10px 14px;background:var(--g2);border:1px solid var(--g4);border-radius:10px;">
@@ -1746,7 +1747,7 @@ sb.realtime.disconnect();
 // ════════════════════════════════════════════════════════════
 const S = {
   pedidos: [], riders: [], depositos: [], solFiltro: 'PENDIENTE',
-  pedFiltro: 'todos', selRiderId: null, selPedidoId: null,
+  pedFiltro: 'todos', selRiderId: null, selPedidoId: null, _papelera: [],
   _pedsFiltrados: null,
   mapInit: false, map: null, markers: {},
   mapRidersInit: false, mapRiders: null, markersRiders: {},
@@ -1895,6 +1896,11 @@ sb.auth.getSession().then(({ data: { session } }) => {
 // INIT
 // ════════════════════════════════════════════════════════════
 async function init() {
+  // Papelera visible solo para ADMIN (ambos caminos de login pasan por aquí)
+  if(esAdmin()){
+    const fp = document.getElementById('fbtn-papelera');
+    if(fp) fp.style.display = '';
+  }
   clockTick();
   setInterval(clockTick, 1000);
   // Fecha en zona horaria de Honduras
@@ -2141,12 +2147,16 @@ async function cargarMetricas() {
     .lte('created_at', hastaUTC)
     .order('created_at', { ascending: false });
   if(!data) return;
-  S.pedidos = data;
-  const total = data.length;
-  const fin   = data.filter(p => p.estatus === 'FINALIZADO').length;
-  const proc  = data.filter(p => !['FINALIZADO','CANCELADO','PENDIENTE','PENDIENTE'].includes(p.estatus)).length;
-  const sa    = data.filter(p => ['PENDIENTE'].includes(p.estatus)).length;
-  const finalizados   = data.filter(p => p.estatus === 'FINALIZADO');
+  // El ADMIN recibe también los eliminados vía RLS. S.pedidos se mantiene
+  // SOLO con vivos para no contaminar métricas, mapa, riders ni asignación.
+  // La papelera se carga por separado en cargarPapelera().
+  const vivos = data.filter(p => p.eliminado !== true);
+  S.pedidos = vivos;
+  const total = vivos.length;
+  const fin   = vivos.filter(p => p.estatus === 'FINALIZADO').length;
+  const proc  = vivos.filter(p => !['FINALIZADO','CANCELADO','PENDIENTE','PENDIENTE'].includes(p.estatus)).length;
+  const sa    = vivos.filter(p => ['PENDIENTE'].includes(p.estatus)).length;
+  const finalizados   = vivos.filter(p => p.estatus === 'FINALIZADO');
   const ing           = finalizados.reduce((s,p) => s + parseFloat(p.tarifa_envio||0), 0);
   const drv           = finalizados.reduce((s,p) => s + parseFloat(p.ingreso_delivery||0), 0);
   const comEnvio      = finalizados.reduce((s,p) => s + parseFloat(p.ingreso_somar||0) - parseFloat(p.base_app||0), 0);
@@ -2325,6 +2335,7 @@ function filtPed(btn, f) {
   document.querySelectorAll('.filter-bar .fbtn').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
   S.pedFiltro = f;
+  if(f === 'eliminados'){ cargarPapelera(); return; }
   renderTablaPedidos();
 }
 
@@ -2332,9 +2343,10 @@ function renderTablaPedidos() {
   const q = (document.getElementById('ped-search')?.value || '').toLowerCase();
   // Usar resultados filtrados de DB si hay búsqueda avanzada activa, si no la memoria local
   let peds = S._pedsFiltrados ?? S.pedidos;
-  if(S.pedFiltro === 'activos')       peds = peds.filter(p => FILTROS_ACTIVOS.includes(p.estatus));
+  if(S.pedFiltro === 'eliminados')      peds = S._papelera || [];
+  else if(S.pedFiltro === 'activos')    peds = peds.filter(p => FILTROS_ACTIVOS.includes(p.estatus));
   else if(S.pedFiltro === 'sinAsignar') peds = peds.filter(p => p.estatus === 'PENDIENTE');
-  else if(S.pedFiltro !== 'todos')    peds = peds.filter(p => p.estatus === S.pedFiltro);
+  else if(S.pedFiltro !== 'todos')      peds = peds.filter(p => p.estatus === S.pedFiltro);
   if(q) peds = peds.filter(p =>
     (p.no_orden||'').toLowerCase().includes(q) ||
     (p.nombre_comercio||'').toLowerCase().includes(q) ||
@@ -2347,8 +2359,9 @@ function renderTablaPedidos() {
   if(!peds.length) { tbody.innerHTML = '<tr><td colspan="8" class="empty">Sin resultados</td></tr>'; return; }
   tbody.innerHTML = peds.map(p => {
     const rider = S.riders.find(r => r.id === p.delivery_id);
-    return `<tr onclick="abrirModalPedido('${p.id}')">
-      <td class="mono" style="color:var(--or)">${p.no_orden||'—'}</td>
+    const elim = p.eliminado === true;
+    return `<tr onclick="abrirModalPedido('${p.id}')" style="${elim?'opacity:.45':''}">
+      <td class="mono" style="color:var(--or)">${elim?'🗑 ':''}${p.no_orden||'—'}</td>
       <td><div style="font-weight:600">${p.nombre_comercio||'—'}</div><div style="font-size:11px;color:var(--td)">${p.nombre_cliente||p.nombre_destinatario||''}</div></td>
       <td style="font-size:12px">${p.ciudad_destino||'—'}</td>
       <td style="font-size:12px">${rider ? rider.nombre : '<span style="color:var(--rojo);font-size:11px">Sin asignar</span>'}</td>
@@ -2362,13 +2375,30 @@ function renderTablaPedidos() {
             : `<span class="timer-badge" data-ts="${new Date(p.hora_asignado).getTime()}">—</span>`
           : '—'}
       </td>
-      <td onclick="event.stopPropagation()">
-        ${['PENDIENTE'].includes(p.estatus)
+      <td onclick="event.stopPropagation()" style="white-space:nowrap">
+        ${elim ? '' : (['PENDIENTE'].includes(p.estatus)
           ? `<button class="btn btn-primary btn-sm" onclick="abrirAsignar('${p.id}')">Asignar</button>`
-          : `<button class="btn btn-ghost btn-sm" onclick="abrirModalPedido('${p.id}')">Ver</button>`}
+          : `<button class="btn btn-ghost btn-sm" onclick="abrirModalPedido('${p.id}')">Ver</button>`)}
+        ${btnEliminar('pedidos', p.id, elim?'cargarPapelera':'cargarMetricas', elim)}
       </td>
     </tr>`;
   }).join('');
+}
+
+// ─── PAPELERA: pedidos eliminados (solo ADMIN los recibe vía RLS) ───
+async function cargarPapelera(){
+  const tbody = document.getElementById('tbody-pedidos');
+  if(tbody) tbody.innerHTML = '<tr><td colspan="8" class="empty">Cargando papelera…</td></tr>';
+  const { data, error } = await sb.from('pedidos')
+    .select('*').eq('eliminado', true)
+    .order('eliminado_at', { ascending:false }).limit(200);
+  if(error){
+    toast('Error al cargar papelera: '+error.message,'danger');
+    if(tbody) tbody.innerHTML = '<tr><td colspan="8" class="empty">Error</td></tr>';
+    return;
+  }
+  S._papelera = data || [];
+  renderTablaPedidos();
 }
 
 // ════════════════════════════════════════════════════════════
@@ -2778,6 +2808,7 @@ async function reintentarAsignacion() {
 async function cargarRiders() {
   const { data, error } = await sb.from('delivery')
     .select('*, ubicaciones_delivery(en_turno, lat, lng)')
+    .eq('eliminado', false)
     .order('nombre');
   if(data) {
     S.riders = data.map(d => {
@@ -2865,8 +2896,9 @@ function renderRidersGrid(filtro='todos') {
         <button class="btn btn-ghost btn-sm" style="flex:1;justify-content:center" onclick="event.stopPropagation();irChat(${d.id})">💬 Chat</button>
         ${d.en_turno && act < 2 ? `<button class="btn btn-primary btn-sm" onclick="event.stopPropagation();abrirAsignarRider(${d.id})">Asignar</button>` : ''}
       </div>
-      <div style="margin-top:6px;">
-        <button class="btn btn-success btn-sm" style="width:100%;justify-content:center" onclick="event.stopPropagation();abrirModalBono(${d.id},'${d.nombre}')">+ Recargar saldo</button>
+      <div style="margin-top:6px;display:flex;gap:6px" onclick="event.stopPropagation()">
+        <button class="btn btn-success btn-sm" style="flex:1;justify-content:center" onclick="abrirModalBono(${d.id},'${d.nombre}')">+ Recargar saldo</button>
+        ${btnEliminar('delivery', d.id, 'cargarRiders', false)}
       </div>
     </div>`;
   }).join('');
@@ -3751,6 +3783,7 @@ async function cargarDepositos(estatus='PENDIENTE') {
   const { data, error: depErr } = await sb.from('depositos_delivery')
     .select('*')
     .eq('estatus', estatus)
+    .eq('eliminado', false)
     .order('creado_at', { ascending: false });
   if(depErr) { console.error('depositos error:', depErr.message); el.innerHTML = '<div class="empty">Error al cargar</div>'; return; }
   if(!data?.length) { el.innerHTML = '<div class="empty">Sin depósitos ' + estatus.toLowerCase() + 's</div>'; return; }
@@ -3773,7 +3806,7 @@ async function cargarDepositos(estatus='PENDIENTE') {
     const rider = ridersMap[d.delivery_id] || {};
     const nombre = rider.nombre || '—';
     const saldoActual = parseFloat(rider.saldo_billetera || 0);
-    return `<div class="dep-card">
+    return `<div class="dep-card" style="${d.eliminado?'opacity:.45':''}">
       <div class="dep-hdr">
         <div class="ch-av" style="border:2px solid var(--or)">${inic(nombre)}</div>
         <div style="flex:1">
@@ -3796,6 +3829,7 @@ async function cargarDepositos(estatus='PENDIENTE') {
           <button class="btn btn-danger btn-sm" onclick="accionDep('${d.id}','RECHAZADO')">✗ Rechazar</button>
           <button class="btn btn-success btn-sm" onclick="accionDep('${d.id}','APROBADO',${d.delivery_id},${d.monto})">✓ Aprobar</button>
         ` : `<span class="chip chip-${estatus}">${estatus}</span>`}
+        ${btnEliminar('depositos_delivery', d.id, "()=>cargarDepositos(S.solFiltro||'PENDIENTE')", false)}
       </div>
     </div>`;
   }).join('');
@@ -4652,9 +4686,9 @@ async function wizBuscarCliente(q) {
   _wizCliTimer = setTimeout(async()=>{
     // Buscar en clientes Y comercios simultáneamente
     const [resC, resCom] = await Promise.all([
-      sb.from('clientes').select('id,nombre,celular,ciudad,direccion,colonia,ubicacion_gps')
+      sb.from('clientes').select('id,nombre,celular,ciudad,direccion,colonia,ubicacion_gps').eq('eliminado',false)
         .or(`nombre.ilike.%${q}%,celular.ilike.%${q}%`).limit(6),
-      sb.from('comercios').select('id,nombre,ciudad,whatsapp,telefono,direccion,ubicacion_gps')
+      sb.from('comercios').select('id,nombre,ciudad,whatsapp,telefono,direccion,ubicacion_gps').eq('eliminado',false)
         .ilike('nombre',`%${q}%`).eq('activo',true).limit(4)
     ]);
     if(!dd) return;
@@ -4780,9 +4814,9 @@ async function wizBuscarComercio(q) {
   if(!q || q.length < 1) { if(dd) dd.style.display='none'; return; }
   _wizComTimer = setTimeout(async()=>{
     const [resCom, resCli] = await Promise.all([
-      sb.from('comercios').select('id,nombre,ciudad,direccion,ubicacion_gps,comision_pct,comision_tipo,categoria_id')
+      sb.from('comercios').select('id,nombre,ciudad,direccion,ubicacion_gps,comision_pct,comision_tipo,categoria_id').eq('eliminado',false)
         .ilike('nombre',`%${q}%`).eq('activo',true).limit(6),
-      sb.from('clientes').select('id,nombre,celular,ciudad,direccion,ubicacion_gps')
+      sb.from('clientes').select('id,nombre,celular,ciudad,direccion,ubicacion_gps').eq('eliminado',false)
         .or(`nombre.ilike.%${q}%,celular.ilike.%${q}%`).limit(4)
     ]);
     if(!dd) return;
@@ -5210,19 +5244,61 @@ function setTipo(v) {
 }
 
 
-// ─── UTIL: eliminar registro ──────────────────────────────────
+// ─── UTIL: eliminar registro (borrado LÓGICO vía RPC admin) ───
+// Tablas con soporte de borrado lógico + reversión de saldo/contabilidad.
+const TABLAS_LOGICAS = ['pedidos','depositos_delivery','liquidaciones_delivery',
+                        'delivery','perfiles','clientes','comercios','movimientos_billetera'];
+
 async function eliminar(tabla, id, callback){
-  // Solo ADMIN puede eliminar registros en cualquier sección
   if(!esAdmin()){ toast('Solo un administrador puede eliminar registros','danger'); return; }
-  if(!confirm('¿Eliminar este registro? Esta acción no se puede deshacer.')) return;
-  const {error}=await sb.from(tabla).delete().eq('id',id);
-  if(error){toast('Error: '+error.message,'danger');return;}
-  toast('✅ Eliminado');
+
+  const logica = TABLAS_LOGICAS.includes(tabla);
+  const aviso = logica
+    ? '¿Eliminar este registro?\n\nSe revertirán los movimientos asociados (saldo, contabilidad).\nPodrás restaurarlo desde la papelera.'
+    : '¿Eliminar este registro? Esta acción no se puede deshacer.';
+  if(!confirm(aviso)) return;
+
+  const motivo = logica ? (prompt('Motivo de la eliminación:') || 'Sin motivo especificado') : null;
+
+  if(logica){
+    const {data,error} = await sb.rpc('admin_eliminar_registro',
+      {p_tabla:tabla, p_id:String(id), p_motivo:motivo});
+    if(error){ toast('Error: '+error.message,'danger'); return; }
+    const rev = data?.reversiones || {};
+    let msg = '✅ Eliminado';
+    if(rev.saldo_rider_nuevo != null) msg += ` · Saldo rider: L.${Number(rev.saldo_rider_nuevo).toFixed(2)}`;
+    if(rev.ingresos_anulados)  msg += ' · Contabilidad revertida';
+    toast(msg);
+  } else {
+    // Catálogos sin borrado lógico: DELETE físico
+    const {error}=await sb.from(tabla).delete().eq('id',id);
+    if(error){toast('Error: '+error.message,'danger');return;}
+    toast('✅ Eliminado');
+  }
+  if(callback) callback();
+}
+
+// Restaurar un registro eliminado
+async function restaurar(tabla, id, callback){
+  if(!esAdmin()){ toast('Solo un administrador puede restaurar registros','danger'); return; }
+  if(!confirm('¿Restaurar este registro?\n\nSe volverán a aplicar los movimientos asociados.')) return;
+  const {error} = await sb.rpc('admin_restaurar_registro', {p_tabla:tabla, p_id:String(id)});
+  if(error){ toast('Error: '+error.message,'danger'); return; }
+  toast('✅ Restaurado');
   if(callback) callback();
 }
 
 // Solo los usuarios con rol ADMIN pueden eliminar/modificar cualquier registro
 function esAdmin(){ return S.miRol === 'ADMIN'; }
+
+// Botón 🗑 / ♻ según estado. Devuelve '' si no es admin (no se pinta el botón).
+function btnEliminar(tabla, id, callback, eliminado){
+  if(!esAdmin()) return '';
+  const cb = callback || '';
+  return eliminado
+    ? `<button class="btn btn-ghost btn-sm" style="color:var(--verde)" title="Restaurar" onclick="restaurar('${tabla}','${id}',${cb})">♻</button>`
+    : `<button class="btn btn-ghost btn-sm" style="color:var(--rojo)" title="Eliminar" onclick="eliminar('${tabla}','${id}',${cb})">🗑</button>`;
+}
 
 // Convierte un foto_url de perfil (path relativo o URL pública de un bucket privado)
 // en una signed URL válida. Devuelve null si no puede resolverla.
@@ -6345,7 +6421,7 @@ function renderClientes() {
         <button class="btn btn-ghost btn-sm" onclick="abrirUbicacionesCliente('${c.id}','${c.nombre.replace(/'/g,"\\'")}')">📍 Ubic.</button>
         <button class="btn btn-ghost btn-sm" onclick="verPedidosCliente('${c.nombre.replace(/'/g,"\\'")}')">📋 Ped.</button>
         <button class="btn btn-ghost btn-sm" onclick="editarDesdeCache('cliente','${c.id}')">✏️</button>
-        <button class="btn btn-ghost btn-sm" style="color:var(--rojo)" onclick="eliminar('clientes','${c.id}',cargarClientes)">🗑</button>
+        ${btnEliminar('clientes', c.id, 'cargarClientes', c.eliminado)}
       </div>
     </div>`).join('');
 }
@@ -6502,7 +6578,7 @@ function renderCategorias(){
       </div>
       <div class="item-card-footer">
         <button class="btn btn-ghost btn-sm" onclick="editarDesdeCache('categoria','${c.id}')">✏️ Editar</button>
-        <button class="btn btn-ghost btn-sm" style="color:var(--rojo)" onclick="eliminar('categorias','${c.id}',cargarCategorias)">🗑</button>
+        ${btnEliminar('categorias', c.id, 'cargarCategorias', false)}
       </div>
     </div>`).join('');
 }
@@ -6572,7 +6648,7 @@ function renderComerciosList(){
         <button class="btn btn-ghost btn-sm" onclick="gestionarCatsComercio(${c.id},'${c.nombre.replace(/'/g,"\\'")}')">🏷 Cats</button>
         <button class="btn btn-ghost btn-sm" onclick="verProductosComercio(${c.id})">📦 Prod.</button>
         <button class="btn btn-ghost btn-sm" onclick="editarDesdeCache('comercio','${c.id}')">✏️</button>
-        <button class="btn btn-ghost btn-sm" style="color:var(--rojo)" onclick="eliminar('comercios',${c.id},cargarComerciosList)">🗑</button>
+        ${btnEliminar('comercios', c.id, 'cargarComerciosList', c.eliminado)}
       </div>
     </div>`).join('');
 }
@@ -6653,7 +6729,7 @@ function renderProductos(){
       ${p.descripcion?`<div class="item-card-body">${p.descripcion}</div>`:''}
       <div class="item-card-footer">
         <button class="btn btn-ghost btn-sm" onclick="editarDesdeCache('producto','${p.id}')">✏️ Editar</button>
-        <button class="btn btn-ghost btn-sm" style="color:var(--rojo)" onclick="eliminar('productos',${p.id},cargarProductos)">🗑</button>
+        ${btnEliminar('productos', p.id, 'cargarProductos', false)}
       </div>
     </div>`).join('');
 }
@@ -6729,7 +6805,7 @@ function renderCupones(){
       </div>
       <div class="item-card-footer">
         <button class="btn btn-ghost btn-sm" onclick="editarDesdeCache('cupon','${c.id}')">✏️ Editar</button>
-        <button class="btn btn-ghost btn-sm" style="color:var(--rojo)" onclick="eliminar('cupones','${c.id}',cargarCupones)">🗑</button>
+        ${btnEliminar('cupones', c.id, 'cargarCupones', false)}
       </div>
     </div>`;}).join('');
 }
@@ -6815,7 +6891,9 @@ function renderUsuarios(){
           <span class="usr-slider"></span>
         </label>
         <button class="btn btn-ghost btn-sm" onclick="editarDesdeCache('usuario','${u.id}')">✏️ Editar</button>
-        ${admin?`<button class="btn btn-ghost btn-sm" style="color:var(--rojo)" onclick="eliminarUsuario('${u.id}')">🗑</button>`:''}
+        ${admin?(u.eliminado
+          ? `<button class="btn btn-ghost btn-sm" style="color:var(--verde)" title="Restaurar" onclick="restaurar('perfiles','${u.id}',cargarUsuarios)">♻</button>`
+          : `<button class="btn btn-ghost btn-sm" style="color:var(--rojo)" title="Eliminar" onclick="eliminarUsuario('${u.id}')">🗑</button>`):''}
       </div>
     </div>`;}).join('');
 }
