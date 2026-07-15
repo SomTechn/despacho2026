@@ -93,6 +93,7 @@ input,select,textarea{font-family:'Barlow',sans-serif;}
 .chip-ENTREGANDO{background:rgba(34,197,94,.12);color:var(--verde);border:1px solid rgba(34,197,94,.25);}
 .chip-FINALIZADO{background:rgba(34,197,94,.08);color:#4ade80;border:1px solid rgba(34,197,94,.15);}
 .chip-CANCELADO{background:rgba(239,68,68,.08);color:#f87171;border:1px solid rgba(239,68,68,.15);}
+.chip-ELIMINADO{background:rgba(148,163,184,.10);color:#94a3b8;border:1px solid rgba(148,163,184,.25);text-decoration:line-through;}
 
 /* ─── VIEWS ────────────────────────────────────────────────── */
 .view{display:none !important;}
@@ -1910,7 +1911,7 @@ async function init() {
   await Promise.all([ cargarMetricas(), cargarRiders(), cargarConfig(), cargarNotifsDespacho() ]);
   cargarZonas(); // cargar zonas en background
   // Badge comprobantes pendientes
-  sb.from('pedidos').select('id',{count:'exact',head:true}).in('metodo_pago',['TRANSFERENCIA','TARJETA']).eq('estatus','FINALIZADO').is('transferencia_validada_por',null).then(({count})=>{ const b=document.getElementById('badge-comp');if(b&&count>0){b.textContent=count;b.style.display='inline';} });
+  sb.from('pedidos').select('id',{count:'exact',head:true}).eq('eliminado',false).in('metodo_pago',['TRANSFERENCIA','TARJETA']).eq('estatus','FINALIZADO').is('transferencia_validada_por',null).then(({count})=>{ const b=document.getElementById('badge-comp');if(b&&count>0){b.textContent=count;b.style.display='inline';} });
   // Badge liquidaciones pendientes
   sb.from('liquidaciones_delivery').select('id',{count:'exact'}).eq('estatus','PENDIENTE').then(({count})=>{ if(count>0){const b=document.getElementById('badge-liq');if(b){b.textContent=count;b.style.display='inline';}} });
   // Badge solicitudes de comercios pendientes
@@ -2304,7 +2305,7 @@ async function buscarPedidosAvanzado() {
 
   if(modoLabel) modoLabel.textContent = '⏳ Buscando...';
 
-  let q = sb.from('pedidos').select('*').order('created_at', { ascending: false }).limit(500);
+  let q = sb.from('pedidos').select('*').eq('eliminado', false).order('created_at', { ascending: false }).limit(500);
 
   if(desde)    q = q.gte('created_at', desde + 'T00:00:00');
   if(hasta)    q = q.lte('created_at', hasta + 'T23:59:59');
@@ -2359,7 +2360,7 @@ function renderTablaPedidos() {
       <td style="font-size:12px">${rider ? rider.nombre : '<span style="color:var(--rojo);font-size:11px">Sin asignar</span>'}</td>
       <td style="font-size:11px">${p.metodo_pago||'—'}</td>
       <td class="mono" style="color:var(--or)">L.${parseFloat(p.tarifa_envio||0).toFixed(0)}</td>
-      <td>${chipEst(p.estatus)}</td>
+      <td>${chipEst(p.estatus, elim)}</td>
       <td style="font-size:11px">
         ${p.hora_asignado
           ? ['FINALIZADO','CANCELADO'].includes(p.estatus)
@@ -2476,7 +2477,7 @@ function renderPanel(p) {
 
   // Header
   document.getElementById('panel-no-orden').textContent = p.no_orden || '—';
-  document.getElementById('panel-estatus-chip').innerHTML = chipEst(p.estatus);
+  document.getElementById('panel-estatus-chip').innerHTML = chipEst(p.estatus, p.eliminado);
 
   // Timer total
   const tsInicio = p.hora_asignado || p.created_at;
@@ -2932,14 +2933,15 @@ async function abrirDetalleRider(riderId) {
     }
 
     // 3) Stats del rider
-    const { count: totalPedidos } = await sb.from('pedidos').select('id',{count:'exact',head:true}).eq('delivery_id', riderId).eq('estatus','FINALIZADO');
-    const { count: cancelados }   = await sb.from('pedidos').select('id',{count:'exact',head:true}).eq('delivery_id', riderId).eq('estatus','CANCELADO');
+    const { count: totalPedidos } = await sb.from('pedidos').select('id',{count:'exact',head:true}).eq('eliminado',false).eq('delivery_id', riderId).eq('estatus','FINALIZADO');
+    const { count: cancelados }   = await sb.from('pedidos').select('id',{count:'exact',head:true}).eq('eliminado',false).eq('delivery_id', riderId).eq('estatus','CANCELADO');
 
     // 3b) Tiempo promedio por pedido — igual que en Mi Guaca del rider:
     //     promedio de (hora_finalizado − hora_aceptado) en minutos, descartando outliers (0–300 min)
     let tiempoPromMin = null;
     const { data: tiemposData } = await sb.from('pedidos')
       .select('hora_aceptado,hora_finalizado')
+      .eq('eliminado', false)
       .eq('delivery_id', riderId).eq('estatus','FINALIZADO')
       .not('hora_aceptado','is',null).not('hora_finalizado','is',null)
       .order('hora_finalizado',{ascending:false}).limit(200);
@@ -3869,6 +3871,7 @@ async function cargarHistorial() {
   if(!desde || !hasta) return;
   const { data } = await sb.from('pedidos')
     .select('*')
+    .eq('eliminado', false)
     .gte('created_at', rangoUTCdesdeHN(desde, desde).desde)
     .lte('created_at', rangoUTCdesdeHN(hasta, hasta).hasta)
     .order('created_at', { ascending: false });
@@ -4112,6 +4115,7 @@ async function actualizarZonaCaliente() {
   const { data: ped30, error } = await sb
     .from('pedidos')
     .select('ciudad_destino,hora_finalizado')
+    .eq('eliminado', false)
     .eq('estatus', 'FINALIZADO')
     .gte('hora_finalizado', hace30.toISOString())
     .not('hora_finalizado', 'is', null);
@@ -6192,7 +6196,7 @@ async function cargarComprobantes(estatus='PENDIENTE') {
   if(!el) return;
   el.innerHTML='<div class="empty">Cargando...</div>';
   let q=sb.from('pedidos').select('id,no_orden,nombre_cliente,nombre_comercio,subtotal,tarifa_envio,monto_cobrar,metodo_pago,imagen_transferencia,transferencia_validada_por,delivery_id,estatus,created_at')
-    .in('metodo_pago',['TRANSFERENCIA','TARJETA']).eq('estatus','FINALIZADO').order('created_at',{ascending:false}).limit(50);
+    .eq('eliminado',false).in('metodo_pago',['TRANSFERENCIA','TARJETA']).eq('estatus','FINALIZADO').order('created_at',{ascending:false}).limit(50);
   if(estatus==='PENDIENTE') q=q.is('transferencia_validada_por',null);
   else if(estatus==='APROBADO') q=q.not('transferencia_validada_por','is',null);
   const {data,error}=await q;
@@ -6326,7 +6330,7 @@ async function cargarClientes() {
   if(MD.clientes.length) {
     const nombres = MD.clientes.map(c=>c.nombre).filter(Boolean);
     const {data:conteos} = await sb.from('pedidos').select('nombre_cliente')
-      .in('nombre_cliente',nombres).eq('estatus','FINALIZADO');
+      .eq('eliminado',false).in('nombre_cliente',nombres).eq('estatus','FINALIZADO');
     if(conteos) {
       const counts={};
       conteos.forEach(p=>{counts[p.nombre_cliente]=(counts[p.nombre_cliente]||0)+1;});
@@ -7377,8 +7381,13 @@ function closeSB() { document.getElementById('sidebar').classList.remove('open')
 // ════════════════════════════════════════════════════════════
 // UTILS
 // ════════════════════════════════════════════════════════════
-function chipEst(e) {
+function chipEst(e, eliminado) {
   const labels = { BORRADOR:'Borrador',PENDIENTE:'Pendiente',ASIGNADO:'Asignado',ACEPTADO:'Aceptado',EN_ESTABLECIMIENTO:'Establecimiento',PEDIDO_EN_CAMINO:'En Camino',ENTREGANDO:'Entregando',FINALIZADO:'Finalizado',CANCELADO:'Cancelado',RECHAZADO:'Rechazado' };
+  // Los eliminados conservan su estatus real en DB (para poder restaurarlos),
+  // pero se muestran como ELIMINADO con el estatus previo entre paréntesis.
+  if(eliminado === true) {
+    return `<span class="chip chip-ELIMINADO"><span class="dot"></span>Eliminado${e?` (${labels[e]||e})`:''}</span>`;
+  }
   return `<span class="chip chip-${e||'PENDIENTE'}"><span class="dot"></span>${labels[e]||e||'—'}</span>`;
 }
 function inic(n) { if(!n) return '?'; const w=n.trim().split(' '); return (w[0][0]+(w[1]?w[1][0]:'')).toUpperCase(); }
@@ -7458,6 +7467,7 @@ async function cargarFinDashboard() {
 
   // Pedidos finalizados en el período
   const { data: peds } = await sb.from('pedidos').select('total,tarifa_envio,subtotal,ingreso_delivery,ingreso_somar,base_app,propina')
+    .eq('eliminado', false)
     .eq('estatus','FINALIZADO').gte('created_at', desde+'T00:00:00').lte('created_at', hasta+'T23:59:59');
 
   const totalPedidos = peds?.length || 0;
