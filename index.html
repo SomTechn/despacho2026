@@ -680,8 +680,8 @@ input,select,textarea{font-family:'Barlow',sans-serif;}
       </div>
     </div>
 
-    <!-- Finanzas -->
-    <div class="nav-sec">
+    <!-- Finanzas — datos sensibles: solo ADMIN (se oculta en init() si no lo es) -->
+    <div class="nav-sec" id="nav-sec-finanzas" style="display:none">
       <div class="nav-lbl">Finanzas</div>
       <div class="nav-item" id="nav-fin-dashboard" onclick="nav('fin-dashboard')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/><path d="M7 8l3 3 2-2 3 3"/></svg>
@@ -1236,7 +1236,7 @@ input,select,textarea{font-family:'Barlow',sans-serif;}
 
             <div class="fg">
               <label class="fl">Tarifa Envío (L.)</label>
-              <input type="number" id="sv-envio-inp" class="fi" value="50" min="0" step="5" oninput="syncStepVal('sv-envio',this.value)">
+              <input type="number" id="sv-envio-inp" class="fi" value="50" min="0" step="5" oninput="S.tarifaBase=parseFloat(this.value)||0;syncStepVal('sv-envio',this.value)">
             </div>
 
             <div class="fg">
@@ -1251,6 +1251,9 @@ input,select,textarea{font-family:'Barlow',sans-serif;}
                 <option value="8">8%</option>
                 <option value="9">9%</option>
                 <option value="10">10%</option>
+                <option value="12">12%</option>
+                <option value="15">15%</option>
+                <option value="MANUAL">Monto directo (precio cliente vs. pago en comercio)</option>
               </select>
             </div>
             <div class="fg" id="g-comision-tipo" style="display:none">
@@ -1259,6 +1262,14 @@ input,select,textarea{font-family:'Barlow',sans-serif;}
                 <option value="ADICIONAL">Se suma al precio (cliente paga más)</option>
                 <option value="INCLUIDA">Incluida en el precio (rider paga menos)</option>
               </select>
+            </div>
+            <!-- Modo MANUAL: la comisión es la RESTA de los dos montos que el
+                 operador ya conoce, no un % ni un monto fijo. -->
+            <div class="fg" id="g-com-manual" style="display:none">
+              <label class="fl">Rider paga en el comercio (L.)</label>
+              <input type="number" id="f-com-pagado" class="fi" value="0" min="0" step="1"
+                     placeholder="Lo que el rider desembolsa" oninput="actualizarResumen()">
+              <div id="com-manual-info" style="font-size:11px;color:#888;margin-top:6px"></div>
             </div>
 
             <!-- Cupón -->
@@ -1571,28 +1582,111 @@ input,select,textarea{font-family:'Barlow',sans-serif;}
           <input type="date" id="fin-hasta" class="fi" style="width:140px;font-size:12px;padding:5px 8px">
           <button class="btn btn-ghost btn-sm" onclick="cargarFinDashboard()">Aplicar</button>
         </div>
-        <!-- KPIs -->
-        <div class="metrics" style="grid-template-columns:repeat(4,1fr);margin-bottom:14px;" id="fin-kpis">
-          <div class="metric"><div class="metric-lbl">Ingresos Pedidos</div><div class="metric-val" id="fk-ing-pedidos">L.0</div><div class="metric-sub" id="fk-ing-pedidos-sub">—</div></div>
-          <div class="metric"><div class="metric-lbl">Ingresos Extras</div><div class="metric-val" id="fk-ing-extras">L.0</div><div class="metric-sub" id="fk-ing-extras-sub">—</div></div>
-          <div class="metric"><div class="metric-lbl">Egresos</div><div class="metric-val" style="color:var(--rojo)" id="fk-egresos">L.0</div><div class="metric-sub" id="fk-egresos-sub">—</div></div>
-          <div class="metric"><div class="metric-lbl">Utilidad Neta</div><div class="metric-val" style="color:var(--verde)" id="fk-utilidad">L.0</div><div class="metric-sub" id="fk-utilidad-sub">—</div></div>
+
+        <!-- ENVÍO: total cobrado, parte del rider, parte de SE -->
+        <div style="font-size:10px;font-weight:700;color:var(--td);text-transform:uppercase;letter-spacing:.07em;margin-bottom:8px;">🛵 Cobro de envío</div>
+        <div class="metrics" style="grid-template-columns:repeat(4,1fr);margin-bottom:14px;">
+          <div class="metric">
+            <div class="metric-lbl">Envío total cobrado</div>
+            <div class="metric-val" id="fk-envio-total">L.0</div>
+            <div class="metric-sub" id="fk-envio-total-sub">—</div>
+          </div>
+          <div class="metric" style="border-left:3px solid var(--az)">
+            <div class="metric-lbl">Para el rider</div>
+            <div class="metric-val" style="color:var(--az)" id="fk-envio-rider">L.0</div>
+            <div class="metric-sub" id="fk-envio-rider-sub">—</div>
+          </div>
+          <div class="metric" style="border-left:3px solid var(--or)">
+            <div class="metric-lbl">Para Somar</div>
+            <div class="metric-val" style="color:var(--or)" id="fk-envio-se">L.0</div>
+            <div class="metric-sub" id="fk-envio-se-sub">—</div>
+          </div>
+          <div class="metric">
+            <div class="metric-lbl">Margen SE sobre envío</div>
+            <div class="metric-val" id="fk-margen-envio">0%</div>
+            <div class="metric-sub">SE ÷ envío cobrado</div>
+          </div>
         </div>
+
+        <!-- INGRESO SOMAR -->
+        <div style="font-size:10px;font-weight:700;color:var(--td);text-transform:uppercase;letter-spacing:.07em;margin-bottom:8px;">💰 Ingreso Somar</div>
+        <div class="metrics" style="grid-template-columns:repeat(4,1fr);margin-bottom:14px;">
+          <div class="metric">
+            <div class="metric-lbl">Comisión producto</div>
+            <div class="metric-val" id="fk-com-prod">L.0</div>
+            <div class="metric-sub" id="fk-com-prod-sub">—</div>
+          </div>
+          <div class="metric" style="border-left:3px solid var(--or)">
+            <div class="metric-lbl">Ingreso Somar total</div>
+            <div class="metric-val" style="color:var(--or)" id="fk-se-total">L.0</div>
+            <div class="metric-sub">envío SE + comisión producto</div>
+          </div>
+          <div class="metric">
+            <div class="metric-lbl">Margen SE global</div>
+            <div class="metric-val" id="fk-margen-global">0%</div>
+            <div class="metric-sub">SE ÷ (envío + com. producto)</div>
+          </div>
+          <div class="metric">
+            <div class="metric-lbl">Ingresos totales</div>
+            <div class="metric-val" id="fk-ing-totales">L.0</div>
+            <div class="metric-sub" id="fk-ing-totales-sub">envío + comisión producto</div>
+          </div>
+        </div>
+
+        <!-- PROMEDIOS Y RESULTADO -->
+        <div style="font-size:10px;font-weight:700;color:var(--td);text-transform:uppercase;letter-spacing:.07em;margin-bottom:8px;">📊 Promedios y resultado</div>
+        <div class="metrics" style="grid-template-columns:repeat(4,1fr);margin-bottom:14px;">
+          <div class="metric">
+            <div class="metric-lbl">Ingreso SE / pedido</div>
+            <div class="metric-val" id="fk-prom-se">L.0</div>
+            <div class="metric-sub" id="fk-prom-se-sub">—</div>
+          </div>
+          <div class="metric">
+            <div class="metric-lbl">Ticket promedio</div>
+            <div class="metric-val" id="fk-ticket">L.0</div>
+            <div class="metric-sub">lo que paga el cliente</div>
+          </div>
+          <div class="metric">
+            <div class="metric-lbl">Egresos</div>
+            <div class="metric-val" style="color:var(--rojo)" id="fk-egresos">L.0</div>
+            <div class="metric-sub" id="fk-egresos-sub">—</div>
+          </div>
+          <div class="metric">
+            <div class="metric-lbl">Utilidad neta</div>
+            <div class="metric-val" style="color:var(--verde)" id="fk-utilidad">L.0</div>
+            <div class="metric-sub" id="fk-utilidad-sub">—</div>
+          </div>
+        </div>
+
+        <!-- ÚLTIMOS 7 DÍAS -->
+        <div class="card" style="margin-bottom:12px">
+          <div class="card-hdr" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+            <div class="card-title">📈 Últimos 7 días</div>
+            <div style="display:flex;gap:16px;font-size:11px">
+              <div><span style="color:var(--td)">GMV: </span><b class="mono" id="f7-gmv" style="color:var(--tx)">L.0</b></div>
+              <div><span style="color:var(--td)">Somar: </span><b class="mono" id="f7-se" style="color:var(--or)">L.0</b></div>
+              <div><span style="color:var(--td)">Pedidos: </span><b class="mono" id="f7-peds">0</b></div>
+            </div>
+          </div>
+          <div id="fin-7d" style="padding:14px"></div>
+        </div>
+
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-          <!-- Desglose pedidos -->
           <div class="card">
-            <div class="card-hdr"><div class="card-title">💰 Desglose de Ingresos Pedidos</div></div>
+            <div class="card-hdr"><div class="card-title">💰 Desglose de Ingresos</div></div>
             <div id="fin-desglose-ped" style="padding:12px 14px;font-size:12px;"></div>
           </div>
-          <!-- Top egresos por categoría -->
           <div class="card">
             <div class="card-hdr"><div class="card-title">📊 Top Egresos por Categoría</div></div>
             <div id="fin-top-egresos" style="padding:12px 14px;font-size:12px;"></div>
           </div>
-          <!-- Saldos cuentas -->
-          <div class="card" style="grid-column:1/-1">
-            <div class="card-hdr"><div class="card-title">🏦 Saldos Actuales por Cuenta</div></div>
-            <div id="fin-saldos-cuentas" style="padding:12px 14px;display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px;"></div>
+          <div class="card">
+            <div class="card-hdr"><div class="card-title">⚙️ Indicadores Operativos</div></div>
+            <div id="fin-operativos" style="padding:12px 14px;font-size:12px;"></div>
+          </div>
+          <div class="card">
+            <div class="card-hdr"><div class="card-title">💳 Mix de Pago y Pasivos</div></div>
+            <div id="fin-mix" style="padding:12px 14px;font-size:12px;"></div>
           </div>
         </div>
       </div>
@@ -1750,7 +1844,7 @@ const S = {
   config: {}, // configuración global del sistema
   panelPedidoId: null, panelTsEstadoActivo: null,
   notifs: [], showNotifs: false,
-  stepVals: { 'sv-prod': 0, 'sv-envio': 50, 'sv-propina': 0 },
+  stepVals: { 'sv-prod': 0, 'sv-envio': 50, 'sv-propina': 0 }, tarifaBase: null,
 };
 
 // ════════════════════════════════════════════════════════════
@@ -1888,12 +1982,18 @@ sb.auth.getSession().then(({ data: { session } }) => {
 // ════════════════════════════════════════════════════════════
 // INIT
 // ════════════════════════════════════════════════════════════
+// Vistas con información financiera sensible (márgenes, utilidad, take rate)
+const VISTAS_SOLO_ADMIN = ['fin-dashboard','fin-egresos','fin-ingresos','fin-cuentas'];
+
 async function init() {
   // Papelera visible solo para ADMIN (ambos caminos de login pasan por aquí)
   if(esAdmin()){
     const fp = document.getElementById('fbtn-papelera');
     if(fp) fp.style.display = '';
   }
+  // La sección Finanzas completa es solo para ADMIN
+  const secFin = document.getElementById('nav-sec-finanzas');
+  if(secFin) secFin.style.display = esAdmin() ? '' : 'none';
   clockTick();
   setInterval(clockTick, 1000);
   // Fecha en zona horaria de Honduras
@@ -2461,7 +2561,8 @@ const HORA_POR_ESTADO = {
 };
 
 function abrirPanel(id) {
-  const p = S.pedidos.find(x => x.id === id);
+  // S.pedidos solo contiene vivos; los eliminados viven en S._papelera
+  const p = S.pedidos.find(x => x.id === id) || (S._papelera||[]).find(x => x.id === id);
   if(!p) return;
   S.panelPedidoId = id;
   renderPanel(p);
@@ -2545,6 +2646,30 @@ function renderPanel(p) {
       ${rider ? `<a href="tel:${rider.celular}" class="btn btn-ghost btn-sm">📞</a>` : ''}
     </div>
 
+    <!-- Cliente / Destinatario -->
+    ${(() => {
+      // El panel no mostraba ningún dato del cliente: solo rider y direcciones.
+      const nom = p.nombre_destinatario || p.nombre_cliente || '';
+      const tel = p.telefono_destinatario || p.celular_cliente || '';
+      const telWA = (tel||'').replace(/[^0-9]/g,'');
+      if(!nom && !tel) return '';
+      const inicial = nom ? nom.trim().split(/\s+/).map(w=>w[0]).join('').toUpperCase().slice(0,2) : '👤';
+      // Si quien recibe difiere de quien pidió, mostrar ambos
+      const distinto = p.nombre_destinatario && p.nombre_cliente
+                    && p.nombre_destinatario !== p.nombre_cliente;
+      return `<div style="background:rgba(34,197,94,.06);border:1px solid rgba(34,197,94,.2);border-radius:10px;padding:12px;margin-bottom:14px;display:flex;align-items:center;gap:10px;">
+        <div style="width:40px;height:40px;border-radius:10px;background:var(--verde);display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:800;flex-shrink:0;color:#000">${inicial}</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:10px;color:var(--td);text-transform:uppercase;letter-spacing:.06em;margin-bottom:2px">Cliente / Recibe</div>
+          <div style="font-size:13px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${nom||'—'}</div>
+          <div style="font-size:11px;color:var(--td)">${tel||'Sin teléfono'}</div>
+          ${distinto ? `<div style="font-size:10px;color:var(--td);margin-top:2px">Pidió: ${p.nombre_cliente}</div>` : ''}
+        </div>
+        ${tel ? `<a href="tel:${tel}" class="btn btn-ghost btn-sm" title="Llamar">📞</a>
+                 <a href="https://wa.me/504${telWA}" target="_blank" class="btn btn-ghost btn-sm" title="WhatsApp">💬</a>` : ''}
+      </div>`;
+    })()}
+
     <!-- Timeline -->
     <div style="font-size:10px;font-weight:700;color:var(--td);text-transform:uppercase;letter-spacing:.07em;margin-bottom:10px;">Línea de tiempo</div>
     <div class="tl" style="margin-bottom:14px;">${timelineHTML}</div>
@@ -2590,6 +2715,10 @@ function renderPanel(p) {
     <!-- Datos -->
     <div style="font-size:10px;font-weight:700;color:var(--td);text-transform:uppercase;letter-spacing:.07em;margin-bottom:10px;">Detalles del pedido</div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 12px;margin-bottom:14px;">
+      ${row('Cliente', p.nombre_cliente||'—')}
+      ${row('Teléfono cliente', p.celular_cliente||'—')}
+      ${(p.nombre_destinatario && p.nombre_destinatario !== p.nombre_cliente) ? row('Recibe', p.nombre_destinatario) : ''}
+      ${(p.telefono_destinatario && p.telefono_destinatario !== p.celular_cliente) ? row('Tel. recibe', p.telefono_destinatario) : ''}
       ${row('Comercio / Origen', p.nombre_comercio||'—')}
       ${row('Tipo', p.tipo||'—')}
       ${row('Ciudad destino', p.ciudad_destino||'—')}
@@ -4463,11 +4592,23 @@ function setMetodoPago(v) {
 }
 
 function calcTarifa() {
+  // La condición de entrega multiplica la tarifa BASE vigente (manual o
+  // calculada por OSRM). Antes hardcodeaba 50, pisando ambas.
   const modos = { NORMAL:1, LLUVIA:1.2, HORA_PICO:1.3, NOCTURNO:1.15 };
   const mod = modos[document.getElementById('f-tarifa-din')?.value] || 1;
-  S.stepVals['sv-envio'] = parseFloat((50 * mod).toFixed(2));
+  const inp = document.getElementById('sv-envio-inp');
+
+  // Base = la última tarifa sin recargo. Se guarda para poder alternar entre
+  // condiciones sin acumular multiplicadores.
+  if(S.tarifaBase == null) {
+    S.tarifaBase = parseFloat(inp?.value) || S.stepVals['sv-envio'] || 50;
+  }
+
+  const val = parseFloat((S.tarifaBase * mod).toFixed(2));
+  S.stepVals['sv-envio'] = val;
+  if(inp) inp.value = val.toFixed(2);
   const el = document.getElementById('sv-envio');
-  if(el) el.textContent = S.stepVals['sv-envio'].toFixed(2);
+  if(el) el.textContent = val.toFixed(2);
   actualizarResumen();
 }
 
@@ -4518,8 +4659,10 @@ async function guardarPedido() {
   const tarifaMod = tarifaModos[tarifaDinVal] || 1;
 
   // INSERT usando schema REAL confirmado de la tabla pedidos
-  const pctCom  = parseFloat(document.getElementById('f-pct-comision')?.value || 0);
-  const baseApp = parseFloat((prod * pctCom / 100).toFixed(2));
+  // El valor del select puede ser 'MANUAL' (no numérico): se toma del resumen.
+  actualizarResumen();  // asegurar que S._montoResumen esté al día
+  const pctCom  = S._montoResumen?.pctCom ?? 0;
+  const baseApp = S._montoResumen?.baseApp ?? 0;
 
   const nuevoPed = {
     // Identificación y canal
@@ -4601,6 +4744,7 @@ async function guardarPedido() {
     'f-descripcion','f-dir-ent','f-gps-ent','f-obs','f-cupon',
     'sv-prod-inp','sv-propina-inp'].forEach(id => { const el=document.getElementById(id); if(el)el.value=''; });
   const envioInp=document.getElementById('sv-envio-inp'); if(envioInp) envioInp.value='50';
+  S.tarifaBase = null;
   _wizCliSel=null; _wizComSel=null; _wizProductos=[]; _wizAllProds=[]; _wizCatsCache=[];
   document.getElementById('cli-seleccionado').style.display='none';
   document.getElementById('com-suc-grp').style.display='none';
@@ -5133,6 +5277,9 @@ async function wizCalcularTarifa() {
     if(det) det.innerHTML = `Sin GPS — tarifa mínima: <b style="color:var(--or)">L. ${tarifa.toFixed(0)}</b>`;
   }
 
+  // Guardar la base SIN recargo: es la referencia para cambiar de condición
+  S.tarifaBase = tarifa;
+
   // Aplicar mod dinámico
   const modos = {NORMAL:1,LLUVIA:1.2,HORA_PICO:1.3,NOCTURNO:1.15};
   const mod = modos[document.getElementById('f-tarifa-din')?.value||'NORMAL']||1;
@@ -5155,43 +5302,65 @@ function actualizarResumen() {
   S.stepVals['sv-envio']  = envio;
   S.stepVals['sv-propina']= prop;
 
-  const pctCom     = parseFloat(document.getElementById('f-pct-comision')?.value||0);
+  const pctComRaw  = document.getElementById('f-pct-comision')?.value || '0';
+  const esManual   = pctComRaw === 'MANUAL';
+  const pctCom     = esManual ? 0 : (parseFloat(pctComRaw) || 0);
   const comTipoEl  = document.getElementById('f-comision-tipo');
-  const comTipo    = comTipoEl?.value || 'ADICIONAL';
+  const comTipo    = esManual ? 'INCLUIDA' : (comTipoEl?.value || 'ADICIONAL');
 
-  // Mostrar/ocultar selector de tipo si hay comisión
+  // El tipo (adicional/incluida) solo aplica al modo porcentaje
   const gComTipo = document.getElementById('g-comision-tipo');
-  if(gComTipo) gComTipo.style.display = pctCom > 0 ? 'block' : 'none';
+  if(gComTipo) gComTipo.style.display = (pctCom > 0 && !esManual) ? 'block' : 'none';
+  const gManual = document.getElementById('g-com-manual');
+  if(gManual) gManual.style.display = esManual ? 'block' : 'none';
 
-  // Calcular comisión (base_app = ganancia de Somar sobre el producto)
-  const baseApp = parseFloat((prod * pctCom / 100).toFixed(2));
+  let baseApp, montoPagado, prodConCom;
 
-  // monto_pagado = lo que el rider paga en recolecta al comercio
-  // ADICIONAL: el comercio cobra el precio base, Somar cobra su comisión aparte al cliente
-  // INCLUIDA:  el precio ya incluye la comisión, el rider solo paga (precio - comision) al comercio
-  const montoPagado = pctCom > 0
-    ? (comTipo === 'INCLUIDA'
-        ? parseFloat((prod - baseApp).toFixed(2))   // rider paga precio_base - comision
-        : prod)                                       // rider paga precio_base completo
-    : prod;                                           // sin comisión: igual al subtotal
+  if(esManual) {
+    // MODO MANUAL: el operador conoce los dos precios reales y la comisión
+    // es la RESTA. No es un % ni un monto fijo: es lo que quedó de diferencia.
+    //   "Monto producto" = lo que se le cobra al cliente
+    //   "Rider paga"     = lo que el rider desembolsa en el comercio
+    montoPagado = parseFloat(document.getElementById('f-com-pagado')?.value||0) || 0;
+    baseApp     = parseFloat((prod - montoPagado).toFixed(2));
+    prodConCom  = prod;  // el precio al cliente ya es el final
 
-  // monto_cobrar = lo que el rider cobra al cliente
-  // ADICIONAL: precio_base + comision + envio + propina - desc
-  // INCLUIDA:  precio_base (ya tiene todo) + envio + propina - desc
-  const prodConCom = pctCom > 0 && comTipo === 'ADICIONAL'
-    ? prod + baseApp
-    : prod;
+    const info = document.getElementById('com-manual-info');
+    if(info) {
+      if(montoPagado <= 0) {
+        info.innerHTML = '<span style="color:#888">Ingresá lo que el rider paga en el comercio</span>';
+      } else if(baseApp < 0) {
+        info.innerHTML = `<span style="color:var(--rojo)">⚠️ El rider pagaría más (L.${montoPagado.toFixed(2)}) de lo que se cobra al cliente (L.${prod.toFixed(2)})</span>`;
+      } else {
+        const pctEq = prod > 0 ? (baseApp/prod*100) : 0;
+        info.innerHTML = `Comisión producto: <b style="color:var(--or)">L. ${baseApp.toFixed(2)}</b> <span style="color:#666">(${pctEq.toFixed(1)}% del precio al cliente)</span>`;
+      }
+    }
+  } else {
+    // MODO PORCENTAJE (comportamiento original)
+    baseApp = parseFloat((prod * pctCom / 100).toFixed(2));
+    // ADICIONAL: el comercio cobra el precio base, Somar suma su comisión al cliente
+    // INCLUIDA:  el precio ya incluye la comisión, el rider paga (precio - comision)
+    montoPagado = pctCom > 0
+      ? (comTipo === 'INCLUIDA' ? parseFloat((prod - baseApp).toFixed(2)) : prod)
+      : prod;
+    prodConCom = (pctCom > 0 && comTipo === 'ADICIONAL') ? prod + baseApp : prod;
+  }
 
   const desc  = S.cuponData ? parseFloat(S.cuponData.descuento) : 0;
   const total = parseFloat((prodConCom + envio + prop - desc).toFixed(2));
 
-  // Ingresos
+  // Ingresos — debe reflejar la MISMA regla que on_pedido_finalizado en la DB:
+  // el rider gana MAX(envío × %, mínimo L.40), topado al envío completo.
   const pctRiderEnvio = parseFloat(S.config?.delivery_pct||66.66)/100;
-  const ingDel = parseFloat((envio*pctRiderEnvio).toFixed(2));
-  const ingSom = parseFloat((envio*(1-pctRiderEnvio)+baseApp).toFixed(2));
+  const minRider = parseFloat(S.config?.ganancia_minima_rider ?? 40);
+  let ingDel = parseFloat((envio*pctRiderEnvio).toFixed(2));
+  if(ingDel < minRider) ingDel = Math.min(minRider, envio);
+  ingDel = parseFloat(ingDel.toFixed(2));
+  const ingSom = parseFloat((Math.max(envio - ingDel, 0) + baseApp).toFixed(2));
 
   // Guardar para usar en guardarPedido
-  S._montoResumen = { prod, montoPagado, prodConCom, total, baseApp, comTipo, pctCom, ingDel, ingSom };
+  S._montoResumen = { prod, montoPagado, prodConCom, total, baseApp, comTipo, pctCom, ingDel, ingSom, esManual };
 
   const set=(id,v)=>{const el=document.getElementById(id);if(el)el.textContent=v;};
   set('r-cliente', _wizCliSel?.nombre||document.getElementById('f-cli-nom')?.value||'—');
@@ -7231,6 +7400,15 @@ function renderConfig() {
     `,
 
     operacion: `
+      ${seccion('🤖','Asignación de Pedidos',`
+        <div class="cfg-fila">
+          <div class="cfg-fila-txt">
+            <div class="cfg-lbl">Auto-asignación de pedidos</div>
+            <div class="cfg-desc">Si está activa, cada pedido nuevo se envía automáticamente al rider disponible más cercano. Si se desactiva, los pedidos quedan en PENDIENTE para asignarlos manualmente desde Despacho.</div>
+          </div>
+          <div style="flex-shrink:0">${toggle('auto_asignacion_activa','Automática','Manual')}</div>
+        </div>
+      `)}
       ${seccion('⚙️','Control de Capacidad',`
         ${fila('max_pedidos_delivery','Pedidos simultáneos por rider','Máximo de pedidos activos que puede tener un rider al mismo tiempo.',1,10,1)}
         ${fila('max_riders_turno','Riders máximos por turno','Límite de riders en turno activo simultáneamente.',1,20,1)}
@@ -7320,6 +7498,12 @@ async function refreshApp() {
 }
 
 function nav(v, pushHistory=true) {
+  // Guarda de acceso: las vistas financieras exponen márgenes y utilidad.
+  // Sin esto, un STAFF podría entrar escribiendo la URL directamente.
+  if(VISTAS_SOLO_ADMIN.includes(v) && !esAdmin()) {
+    toast('Sección restringida a administradores','danger');
+    v = 'inicio';
+  }
   document.querySelectorAll('.view').forEach(el => el.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
   const view = document.getElementById('view-'+v);
@@ -7473,78 +7657,199 @@ async function cargarFinDashboard() {
   const desde = document.getElementById('fin-desde')?.value || finPrimerDiaMes();
   const hasta = document.getElementById('fin-hasta')?.value || finFechaHoy();
 
-  // Pedidos finalizados en el período
-  const { data: peds } = await sb.from('pedidos').select('total,tarifa_envio,subtotal,ingreso_delivery,ingreso_somar,base_app,propina')
-    .eq('eliminado', false)
-    .eq('estatus','FINALIZADO').gte('created_at', desde+'T00:00:00').lte('created_at', hasta+'T23:59:59');
+  // ingresos_operativos es la fuente contable (excluye anulados y eliminados).
+  // Se usan comision_envio / comision_producto reales: el 34% fijo del código
+  // anterior era ficción — con el mínimo de L.40 el margen varía por pedido.
+  const { data: io } = await sb.from('ingresos_operativos')
+    .select('fecha,tarifa_envio,subtotal,ingreso_somar,ingreso_delivery,comision_envio,comision_producto,propina,metodo_pago,delivery_id')
+    .eq('anulado', false).gte('fecha', desde).lte('fecha', hasta);
 
-  const totalPedidos = peds?.length || 0;
-  const ingPedidos   = peds?.reduce((s,p)=>s+parseFloat(p.ingreso_somar||0),0) || 0;
-  const ingEnvios    = peds?.reduce((s,p)=>s+parseFloat(p.tarifa_envio||0)*0.34,0) || 0;
-  const ingComs      = peds?.reduce((s,p)=>s+parseFloat(p.base_app||0),0) || 0;
-  const ingPropinas  = peds?.reduce((s,p)=>s+parseFloat(p.propina||0),0) || 0;
+  const R = (a, f) => (a||[]).reduce((s,x)=>s+parseFloat(x[f]||0),0);
+  const nPed = io?.length || 0;
 
-  // Ingresos extras
+  const envioTotal = R(io,'tarifa_envio');
+  const envioRider = R(io,'ingreso_delivery');
+  const envioSE    = R(io,'comision_envio');
+  const comProd    = R(io,'comision_producto');
+  const seTotal    = R(io,'ingreso_somar');
+  const propinas   = R(io,'propina');
+  const gmvProd    = R(io,'subtotal');
+  const gmv        = gmvProd + envioTotal + propinas;
+
+  const pct = (n,d) => d > 0 ? (n/d*100) : 0;
+  // Ingresos totales del negocio = lo que se cobra por envío + la comisión de
+  // producto. NO incluye el costo del producto (que el rider adelanta y se le
+  // reembolsa) ni la propina (100% del rider).
+  const ingresosTotales = envioTotal + comProd;
+  const margenEnvio  = pct(envioSE, envioTotal);      // SE sobre el envío cobrado
+  const margenGlobal = pct(seTotal, ingresosTotales); // SE sobre ingresos totales
+  const takeRate     = pct(seTotal, gmv);             // SE sobre todo el GMV (en Operativos)
+
+  // Ingresos extras y egresos
   const { data: extras } = await sb.from('ingresos_extras').select('monto')
     .eq('anulado',false).gte('fecha',desde).lte('fecha',hasta);
-  const ingExtras = extras?.reduce((s,i)=>s+parseFloat(i.monto||0),0) || 0;
+  const ingExtras = R(extras,'monto');
 
-  // Egresos
   const { data: egs } = await sb.from('egresos').select('monto,categoria_id,categorias_egreso!inner(nombre)')
     .eq('anulado',false).gte('fecha',desde).lte('fecha',hasta);
-  const totalEgresos = egs?.reduce((s,e)=>s+parseFloat(e.monto||0),0) || 0;
+  const totalEgresos = R(egs,'monto');
+  const utilidad = seTotal + ingExtras - totalEgresos;
+  const margenOper = pct(utilidad, seTotal + ingExtras);
 
-  const utilidad = ingPedidos + ingExtras - totalEgresos;
+  const set = (id,v) => { const e=document.getElementById(id); if(e) e.textContent=v; };
 
-  // Render KPIs
-  document.getElementById('fk-ing-pedidos').textContent = fL(ingPedidos);
-  document.getElementById('fk-ing-pedidos-sub').textContent = `${totalPedidos} pedidos finalizados`;
-  document.getElementById('fk-ing-extras').textContent = fL(ingExtras);
-  document.getElementById('fk-ing-extras-sub').textContent = `${extras?.length||0} registros`;
-  document.getElementById('fk-egresos').textContent = fL(totalEgresos);
-  document.getElementById('fk-egresos-sub').textContent = `${egs?.length||0} egresos`;
-  document.getElementById('fk-utilidad').textContent = fL(utilidad);
-  document.getElementById('fk-utilidad-sub').textContent = utilidad >= 0 ? 'Positiva ✓' : 'Negativa ⚠';
-  document.getElementById('fk-utilidad').style.color = utilidad >= 0 ? 'var(--verde)' : 'var(--rojo)';
+  // ── Envío ──
+  set('fk-envio-total', fL(envioTotal));
+  set('fk-envio-total-sub', `${nPed} pedido${nPed===1?'':'s'}`);
+  set('fk-envio-rider', fL(envioRider));
+  set('fk-envio-rider-sub', `${pct(envioRider,envioTotal).toFixed(1)}% del envío`);
+  set('fk-envio-se', fL(envioSE));
+  set('fk-envio-se-sub', `${margenEnvio.toFixed(1)}% del envío`);
+  set('fk-margen-envio', margenEnvio.toFixed(1)+'%');
 
-  // Desglose pedidos
-  document.getElementById('fin-desglose-ped').innerHTML = [
-    ['Tarifa envío (Somar 34%)', fL(ingEnvios)],
-    ['Comisión productos', fL(ingComs)],
-    ['Propinas', fL(ingPropinas)],
-    ['Total Somar de pedidos', fL(ingPedidos)],
-  ].map(([l,v],i)=>`<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--g3);${i===3?'font-weight:800;border:none;padding-top:10px;':''}">
-    <span style="color:var(--td)">${l}</span><span style="color:${i===3?'var(--or)':'inherit'}">${v}</span></div>`).join('');
+  // ── Ingreso Somar ──
+  set('fk-com-prod', fL(comProd));
+  const conCom = (io||[]).filter(x=>parseFloat(x.comision_producto||0)>0).length;
+  set('fk-com-prod-sub', `${conCom} de ${nPed} pedidos (${pct(conCom,nPed).toFixed(0)}%)`);
+  set('fk-se-total', fL(seTotal));
+  set('fk-margen-global', margenGlobal.toFixed(1)+'%');
+  set('fk-ing-totales', fL(ingresosTotales));
+  set('fk-ing-totales-sub', `${fL(envioTotal)} envío + ${fL(comProd)} producto`);
 
-  // Top egresos por categoría
+  // ── Promedios ──
+  const promSE  = nPed ? seTotal/nPed : 0;
+  const promEnv = nPed ? envioSE/nPed : 0;
+  const promCom = nPed ? comProd/nPed : 0;
+  set('fk-prom-se', fL(promSE));
+  set('fk-prom-se-sub', `envío ${fL(promEnv)} + producto ${fL(promCom)}`);
+  set('fk-ticket', fL(nPed ? gmv/nPed : 0));
+  set('fk-egresos', fL(totalEgresos));
+  set('fk-egresos-sub', `${egs?.length||0} egreso${egs?.length===1?'':'s'}`);
+  set('fk-utilidad', fL(utilidad));
+  set('fk-utilidad-sub', nPed||totalEgresos ? `margen ${margenOper.toFixed(1)}%` : '—');
+  const eu = document.getElementById('fk-utilidad');
+  if(eu) eu.style.color = utilidad >= 0 ? 'var(--verde)' : 'var(--rojo)';
+
+  // ── Desglose ──
+  const fila = (l,v,col,bold) => `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--g3);${bold?'font-weight:800;border:none;padding-top:10px':''}">
+    <span style="color:var(--td)">${l}</span><span class="mono" style="color:${col||'inherit'}">${v}</span></div>`;
+  document.getElementById('fin-desglose-ped').innerHTML =
+      fila('Envío cobrado al cliente', fL(envioTotal))
+    + fila('— pagado al rider', '-'+fL(envioRider), 'var(--az)')
+    + fila('= Somar por envío', fL(envioSE), 'var(--or)')
+    + fila('Comisión por producto', fL(comProd), 'var(--or)')
+    + fila('Ingresos extras', fL(ingExtras))
+    + fila('Propinas (100% rider)', fL(propinas), 'var(--td)')
+    + fila('Total Somar', fL(seTotal + ingExtras), 'var(--or)', true);
+
+  // ── Top egresos ──
   const catMap = {};
   egs?.forEach(e => {
     const nom = e.categorias_egreso?.nombre || 'Sin categoría';
     catMap[nom] = (catMap[nom]||0) + parseFloat(e.monto||0);
   });
-  const topCats = Object.entries(catMap).sort((a,b)=>b[1]-a[1]).slice(0,6);
-  document.getElementById('fin-top-egresos').innerHTML = topCats.length
-    ? topCats.map(([nom,monto])=>`<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--g3)">
-        <span style="color:var(--td);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:60%">${nom}</span>
-        <span style="color:var(--rojo);font-weight:700">${fL(monto)}</span></div>`).join('')
-    : '<div class="empty">Sin egresos en el período</div>';
+  const cats = Object.entries(catMap).sort((a,b)=>b[1]-a[1]).slice(0,6);
+  document.getElementById('fin-top-egresos').innerHTML = cats.length
+    ? cats.map(([n,v])=>`<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--g3)">
+        <span style="color:var(--td)">${n}</span>
+        <span class="mono" style="color:var(--rojo)">${fL(v)} <span style="color:var(--td);font-size:10px">${pct(v,totalEgresos).toFixed(0)}%</span></span></div>`).join('')
+    : '<div class="empty" style="padding:20px">Sin egresos en el período</div>';
 
-  // Saldos cuentas
-  const { data: cuentas } = await sb.from('cuentas_financieras').select('nombre,icono,tipo,saldo_actual,uso_mixto').eq('activa',true).order('orden');
-  document.getElementById('fin-saldos-cuentas').innerHTML = cuentas?.map(c=>`
-    <div style="background:var(--g3);border-radius:10px;padding:12px 14px;border:1px solid var(--g4)">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
-        <span style="font-size:18px">${c.icono||'🏦'}</span>
-        <div style="flex:1;min-width:0">
-          <div style="font-size:12px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${c.nombre}</div>
-          <div style="font-size:10px;color:var(--td)">${c.tipo}${c.uso_mixto?' · mixta':''}</div>
-        </div>
-      </div>
-      <div style="font-family:'Space Mono',monospace;font-size:18px;font-weight:700;color:${parseFloat(c.saldo_actual||0)>=0?'var(--verde)':'var(--rojo)'}">${fL(c.saldo_actual)}</div>
-    </div>`).join('') || '<div class="empty">Sin cuentas</div>';
+  // ── Operativos ──
+  const ridersAct = new Set((io||[]).map(x=>x.delivery_id).filter(Boolean)).size;
+  document.getElementById('fin-operativos').innerHTML =
+      fila('Ingresos totales (envío + com. producto)', fL(ingresosTotales), 'var(--tx)')
+    + fila('GMV total (producto + envío + propina)', fL(gmv))
+    + fila('GMV solo producto', fL(gmvProd))
+    + fila('Take rate sobre GMV', takeRate.toFixed(1)+'%')
+    + fila('Pedidos finalizados', String(nPed))
+    + fila('Riders que generaron ingreso', String(ridersAct))
+    + fila('Ingreso Somar por rider activo', fL(ridersAct ? seTotal/ridersAct : 0))
+    + fila('Pedidos por rider activo', ridersAct ? (nPed/ridersAct).toFixed(1) : '0')
+    + fila('Margen operativo', margenOper.toFixed(1)+'%', utilidad>=0?'var(--verde)':'var(--rojo)', true);
+
+  // ── Mix de pago y pasivos ──
+  const mix = {};
+  (io||[]).forEach(x => {
+    const m = x.metodo_pago || '—';
+    mix[m] = (mix[m]||0) + parseFloat(x.subtotal||0) + parseFloat(x.tarifa_envio||0);
+  });
+  const totalMix = Object.values(mix).reduce((a,b)=>a+b,0);
+
+  const { data: liqs } = await sb.from('liquidaciones_delivery')
+    .select('monto_liquidar').eq('estatus','PENDIENTE').eq('eliminado',false);
+  const liqPend = R(liqs,'monto_liquidar');
+
+  const { data: deps } = await sb.from('depositos_delivery')
+    .select('monto').eq('estatus','PENDIENTE').eq('eliminado',false);
+  const depPend = R(deps,'monto');
+
+  document.getElementById('fin-mix').innerHTML =
+      Object.entries(mix).sort((a,b)=>b[1]-a[1]).map(([m,v])=>
+        fila(m, `${fL(v)} <span style="color:var(--td);font-size:10px">${pct(v,totalMix).toFixed(0)}%</span>`))
+        .join('')
+    + fila('Liquidaciones pendientes (le debemos)', fL(liqPend), liqPend>0?'var(--am)':'var(--td)')
+    + fila('Depósitos por aprobar', fL(depPend), depPend>0?'var(--am)':'var(--td)');
+
+  // ── Últimos 7 días ──
+  cargarFin7Dias();
 }
 
-// ─── EGRESOS ─────────────────────────────────────────────────
+// Tendencia de 7 días (independiente del filtro de fecha de arriba)
+async function cargarFin7Dias() {
+  const hoy = new Date();
+  const dias = [];
+  for(let i=6;i>=0;i--){
+    const d = new Date(hoy); d.setDate(d.getDate()-i);
+    dias.push(d.toISOString().slice(0,10));
+  }
+  const { data } = await sb.from('ingresos_operativos')
+    .select('fecha,ingreso_somar,subtotal,tarifa_envio,propina')
+    .eq('anulado',false).gte('fecha',dias[0]).lte('fecha',dias[6]);
+
+  const porDia = {};
+  dias.forEach(d => porDia[d] = { se:0, gmv:0, n:0 });
+  (data||[]).forEach(r => {
+    const k = r.fecha;
+    if(!porDia[k]) return;
+    porDia[k].se  += parseFloat(r.ingreso_somar||0);
+    porDia[k].gmv += parseFloat(r.subtotal||0)+parseFloat(r.tarifa_envio||0)+parseFloat(r.propina||0);
+    porDia[k].n++;
+  });
+
+  const totSE  = dias.reduce((s,d)=>s+porDia[d].se,0);
+  const totGMV = dias.reduce((s,d)=>s+porDia[d].gmv,0);
+  const totN   = dias.reduce((s,d)=>s+porDia[d].n,0);
+  const set = (id,v)=>{const e=document.getElementById(id); if(e) e.textContent=v;};
+  set('f7-se', fL(totSE)); set('f7-gmv', fL(totGMV)); set('f7-peds', String(totN));
+
+  const max = Math.max(...dias.map(d=>porDia[d].gmv), 1);
+  const nomDia = ['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
+  document.getElementById('fin-7d').innerHTML = `
+    <div style="display:flex;align-items:flex-end;gap:6px;height:130px">
+      ${dias.map(d => {
+        const o = porDia[d];
+        const hG = Math.max((o.gmv/max)*100, o.gmv>0?4:0);
+        const hS = o.gmv>0 ? (o.se/o.gmv)*hG : 0;
+        const dt = new Date(d+'T12:00:00');
+        const hoyEs = d === dias[6];
+        return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;height:100%;justify-content:flex-end"
+                     title="${d} · GMV ${fL(o.gmv)} · Somar ${fL(o.se)} · ${o.n} pedidos">
+          <div class="mono" style="font-size:9px;color:var(--or);font-weight:700">${o.se>0?fL(o.se).replace('L. ',''):''}</div>
+          <div style="width:100%;height:${hG}%;background:var(--g4);border-radius:4px 4px 0 0;position:relative;min-height:${o.gmv>0?'4px':'0'};display:flex;align-items:flex-end">
+            <div style="width:100%;height:${o.gmv>0?(hS/hG*100):0}%;background:var(--or);border-radius:${hS>=hG?'4px 4px 0 0':'0'}"></div>
+          </div>
+          <div style="font-size:9px;color:${hoyEs?'var(--or)':'var(--td)'};font-weight:${hoyEs?'700':'400'}">${nomDia[dt.getDay()]}</div>
+          <div style="font-size:8px;color:var(--td)">${o.n||''}</div>
+        </div>`;
+      }).join('')}
+    </div>
+    <div style="display:flex;gap:14px;justify-content:center;margin-top:10px;font-size:10px;color:var(--td)">
+      <span><span style="display:inline-block;width:8px;height:8px;background:var(--or);border-radius:2px;margin-right:4px"></span>Ingreso Somar</span>
+      <span><span style="display:inline-block;width:8px;height:8px;background:var(--g4);border-radius:2px;margin-right:4px"></span>GMV total</span>
+    </div>`;
+}
+
 async function cargarEgresos() {
   const desde = document.getElementById('eg-desde')?.value || finPrimerDiaMes();
   const hasta = document.getElementById('eg-hasta')?.value || finFechaHoy();
