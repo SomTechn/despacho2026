@@ -2514,16 +2514,92 @@ async function aprobarFactura(pedidoId) {
   }
 }
 
+// Vista previa del reparto — refleja la MISMA regla que la DB
+// (mínimo L.40 topado a la tarifa, comisión producto por % o por resta).
+function edPreview() {
+  const g = id => parseFloat(document.getElementById('ed-'+id)?.value || 0) || 0;
+  const sub = g('subtotal'), pag = g('pagado'), env = g('envio'), pro = g('propina'), pct = g('pct');
+
+  const comProd = pct > 0 ? +(sub * pct / 100).toFixed(2)
+                          : (pag > 0 && pag < sub ? +(sub - pag).toFixed(2) : 0);
+  const minR = parseFloat(S.config?.ganancia_minima_rider ?? 40);
+  let rider = +(env * 0.66).toFixed(2);
+  if(rider < minR) rider = Math.min(minR, env);
+  const somarEnv = Math.max(+(env - rider).toFixed(2), 0);
+  const somar = +(somarEnv + comProd).toFixed(2);
+
+  const el = document.getElementById('ed-preview');
+  if(el) el.innerHTML = `Rider: <b style="color:var(--az)">L.${rider.toFixed(2)}</b> · `
+    + `Somar: <b style="color:var(--or)">L.${somar.toFixed(2)}</b> `
+    + `<span style="color:#666">(envío ${somarEnv.toFixed(2)} + producto ${comProd.toFixed(2)})</span>`
+    + `${pro>0?` · Propina rider: L.${pro.toFixed(2)}`:''}`;
+}
+
+async function guardarEdicionPedido(pedidoId) {
+  const ped = S.pedidos.find(x=>x.id===pedidoId) || (S._papelera||[]).find(x=>x.id===pedidoId);
+  const cerrado = ['FINALIZADO','CANCELADO'].includes(ped?.estatus) || ped?.eliminado === true;
+  // STAFF solo puede editar pedidos en curso; una vez cerrados, solo ADMIN.
+  if(cerrado && !esAdmin()) {
+    toast('Solo un administrador puede editar un pedido ya finalizado','danger'); return;
+  }
+  const g  = id => document.getElementById('ed-'+id)?.value;
+  const gn = id => parseFloat(g(id) || 0) || 0;
+
+  if(!confirm('¿Guardar los cambios?\n\nSe recalcularán comisión, saldo del rider y contabilidad.')) return;
+
+  const { error } = await sb.from('pedidos').update({
+    estatus:          g('estatus'),
+    metodo_pago:      g('metodo'),
+    nombre_cliente:   g('cliente')  || null,
+    celular_cliente:  g('tel')      || null,
+    nombre_comercio:  g('comercio') || null,
+    ciudad_destino:   g('ciudad')   || null,
+    direccion_entrega:g('dir')      || null,
+    subtotal:         gn('subtotal'),
+    monto_pagado:     gn('pagado'),
+    tarifa_envio:     gn('envio'),
+    propina:          gn('propina'),
+    pct_comision:     gn('pct'),
+    total:            gn('total'),
+    monto_cobrar:     gn('total'),
+  }).eq('id', pedidoId);
+
+  if(error) { toast('Error: '+error.message,'danger'); return; }
+  toast('✅ Pedido actualizado — montos recalculados');
+  await cargarMetricas();
+  const act = S.pedidos.find(x=>x.id===pedidoId) || (S._papelera||[]).find(x=>x.id===pedidoId);
+  if(act) renderPanel(act); else cerrarPanel();
+}
+
 async function guardarPago(pedidoId) {
   const metodo = document.getElementById('edit-metodo-pago')?.value;
   const monto  = parseFloat(document.getElementById('edit-monto-cobrar')?.value || 0);
   const pagaCon= parseFloat(document.getElementById('edit-paga-con')?.value || 0);
-  const { error } = await sb.from('pedidos').update({
+  const ped    = S.pedidos.find(x=>x.id===pedidoId) || (S._papelera||[]).find(x=>x.id===pedidoId);
+
+  // Antes solo se actualizaba monto_cobrar: el pedido quedaba cobrando L.75
+  // pero contabilizando L.60. La diferencia no llegaba ni a la comisión ni a
+  // la contabilidad. Ahora se ajusta la tarifa de envío para que cuadre.
+  const upd = {
     metodo_pago: metodo,
     monto_cobrar: monto,
     monto_recibido_efectivo: pagaCon > 0 ? pagaCon : null,
     recibira_efectivo: pagaCon > 0,
-  }).eq('id', pedidoId);
+  };
+  if(ped) {
+    const totalViejo = parseFloat(ped.total||0);
+    const delta = parseFloat((monto - totalViejo).toFixed(2));
+    if(Math.abs(delta) >= 0.01) {
+      if(!confirm(`El total pasa de L.${totalViejo.toFixed(2)} a L.${monto.toFixed(2)}.\n\n`
+                 +`La diferencia de L.${delta.toFixed(2)} se aplicará a la TARIFA DE ENVÍO `
+                 +`(pasará de L.${parseFloat(ped.tarifa_envio||0).toFixed(2)} a `
+                 +`L.${(parseFloat(ped.tarifa_envio||0)+delta).toFixed(2)}).\n\n`
+                 +`Se recalcularán comisión, saldo del rider y contabilidad. ¿Continuar?`)) return;
+      upd.total        = monto;
+      upd.tarifa_envio = parseFloat((parseFloat(ped.tarifa_envio||0) + delta).toFixed(2));
+    }
+  }
+  const { error } = await sb.from('pedidos').update(upd).eq('id', pedidoId);
   if(error) { toast('Error: ' + error.message, 'danger'); return; }
   toast('✅ Pago actualizado', 'success');
   // Actualizar pedido en estado local
@@ -2822,6 +2898,54 @@ function renderPanel(p) {
     </div>
     ` : ''}
   `;
+
+  // Editor completo. ADMIN: siempre. STAFF: solo mientras el pedido está en
+  // curso (una vez FINALIZADO/CANCELADO ya movió saldo y contabilidad).
+  const cerrado = ['FINALIZADO','CANCELADO'].includes(p.estatus) || p.eliminado === true;
+  if(esAdmin() || !cerrado) {
+    const inp = (id,val,tipo,step) => `<input type="${tipo||'text'}" id="ed-${id}" ${step?`step="${step}"`:''} value="${val??''}"
+      style="width:100%;background:var(--g3);border:1px solid var(--g5);border-radius:6px;padding:7px 9px;color:var(--tx);font-size:13px">`;
+    const lbl = t => `<label style="font-size:10px;color:var(--td);font-weight:600;display:block;margin-bottom:3px">${t}</label>`;
+    const opt = (v,sel) => `<option value="${v}" ${v===sel?'selected':''}>${v}</option>`;
+
+    document.getElementById('panel-body').insertAdjacentHTML('beforeend', `
+      <details style="margin-top:14px;border:1px solid var(--or);border-radius:10px;overflow:hidden">
+        <summary style="padding:10px 14px;background:rgba(255,140,0,.08);cursor:pointer;font-size:12px;font-weight:700;color:var(--or)">
+          🔧 Editar pedido${esAdmin() ? ' (Admin)' : ''}
+        </summary>
+        <div style="padding:14px;display:grid;grid-template-columns:1fr 1fr;gap:10px">
+          <div style="grid-column:1/-1;font-size:10px;color:var(--am)">
+            ${cerrado
+              ? '⚠️ Pedido cerrado: al guardar se recalculan comisión, saldo del rider y contabilidad.'
+              : '⚠️ Los montos se recalculan al finalizar el pedido.'}
+          </div>
+          <div>${lbl('Estatus')}<select id="ed-estatus" style="width:100%;background:var(--g3);border:1px solid var(--g5);border-radius:6px;padding:7px 9px;color:var(--tx);font-size:13px">
+            ${['PENDIENTE','ASIGNADO','ACEPTADO','EN_ESTABLECIMIENTO','PEDIDO_EN_CAMINO','ENTREGANDO','FINALIZADO','CANCELADO'].map(x=>opt(x,p.estatus)).join('')}
+          </select></div>
+          <div>${lbl('Método de pago')}<select id="ed-metodo" style="width:100%;background:var(--g3);border:1px solid var(--g5);border-radius:6px;padding:7px 9px;color:var(--tx);font-size:13px">
+            ${['EFECTIVO','TRANSFERENCIA','TARJETA'].map(x=>opt(x,p.metodo_pago)).join('')}
+          </select></div>
+          <div>${lbl('Cliente')}${inp('cliente', p.nombre_cliente)}</div>
+          <div>${lbl('Teléfono')}${inp('tel', p.celular_cliente)}</div>
+          <div>${lbl('Comercio / Origen')}${inp('comercio', p.nombre_comercio)}</div>
+          <div>${lbl('Ciudad destino')}${inp('ciudad', p.ciudad_destino)}</div>
+          <div style="grid-column:1/-1">${lbl('Dirección de entrega')}${inp('dir', p.direccion_entrega)}</div>
+          <div>${lbl('Producto al cliente (L.)')}${inp('subtotal', parseFloat(p.subtotal||0).toFixed(2),'number','0.01')}</div>
+          <div>${lbl('Rider paga en comercio (L.)')}${inp('pagado', parseFloat(p.monto_pagado||0).toFixed(2),'number','0.01')}</div>
+          <div>${lbl('Tarifa de envío (L.)')}${inp('envio', parseFloat(p.tarifa_envio||0).toFixed(2),'number','0.01')}</div>
+          <div>${lbl('Propina (L.)')}${inp('propina', parseFloat(p.propina||0).toFixed(2),'number','0.01')}</div>
+          <div>${lbl('% comisión producto')}${inp('pct', parseFloat(p.pct_comision||0).toFixed(2),'number','0.01')}</div>
+          <div>${lbl('Total a cobrar (L.)')}${inp('total', parseFloat(p.monto_cobrar||p.total||0).toFixed(2),'number','0.01')}</div>
+          <div style="grid-column:1/-1;background:var(--g2);border-radius:6px;padding:8px;font-size:11px;color:var(--td)" id="ed-preview">—</div>
+          <button class="btn btn-primary" style="grid-column:1/-1;justify-content:center" onclick="guardarEdicionPedido('${p.id}')">💾 Guardar cambios</button>
+        </div>
+      </details>`);
+
+    ['subtotal','pagado','envio','propina','pct'].forEach(id => {
+      document.getElementById('ed-'+id)?.addEventListener('input', edPreview);
+    });
+    edPreview();
+  }
 
   // Footer con acciones
   document.getElementById('panel-footer').innerHTML = `
