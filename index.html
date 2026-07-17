@@ -4798,7 +4798,7 @@ async function guardarPedido() {
     // Referencias cruzadas — quien crea y qué cliente/comercio
     creado_por_id:            (await sb.auth.getUser())?.data?.user?.id || null,
     cliente_id:               _wizCliSel?.id || null,
-    comercio_id:              _wizComSel?.id ? parseInt(_wizComSel.id) : null,
+    comercio_id:              (_wizComSel && !_wizComSel._esPersona && _wizComSel.id) ? parseInt(_wizComSel.id) : null,
 
     // Cliente
     nombre_cliente:           cli,
