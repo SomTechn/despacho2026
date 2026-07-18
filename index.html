@@ -1236,7 +1236,7 @@ input,select,textarea{font-family:'Barlow',sans-serif;}
 
             <div class="fg">
               <label class="fl">Tarifa Envío (L.)</label>
-              <input type="number" id="sv-envio-inp" class="fi" value="50" min="0" step="5" oninput="S.tarifaBase=parseFloat(this.value)||0;syncStepVal('sv-envio',this.value)">
+              <input type="number" id="sv-envio-inp" class="fi" value="50" min="0" step="5" oninput="S.tarifaManual=true;S.tarifaBase=parseFloat(this.value)||0;syncStepVal('sv-envio',this.value);marcarTarifaManual()">
             </div>
 
             <div class="fg">
@@ -1844,7 +1844,7 @@ const S = {
   config: {}, // configuración global del sistema
   panelPedidoId: null, panelTsEstadoActivo: null,
   notifs: [], showNotifs: false,
-  stepVals: { 'sv-prod': 0, 'sv-envio': 50, 'sv-propina': 0 }, tarifaBase: null,
+  stepVals: { 'sv-prod': 0, 'sv-envio': 50, 'sv-propina': 0 }, tarifaBase: null, tarifaManual: false,
 };
 
 // ════════════════════════════════════════════════════════════
@@ -2839,15 +2839,78 @@ function renderPanel(p) {
       ).join('')}
     </div>
     <div style="background:var(--g2);border-radius:10px;overflow:hidden;margin-bottom:14px;">
-      ${[
-        [`Ingreso Rider (${parseFloat(S.config?.delivery_pct||66).toFixed(0)}%)`, `<span style="color:var(--verde)">${fL(p.ingreso_delivery)}</span>`],
-        [`Ingreso Somar (${(100-parseFloat(S.config?.delivery_pct||66)).toFixed(0)}%)`, `<span style="color:var(--or)">${fL(p.ingreso_somar)}</span>`],
-      ].map(([l,v]) =>
+      ${(() => {
+        const _baseEnv = parseFloat(p.tarifa_envio) || 0;
+        const _iRid    = parseFloat(p.ingreso_delivery) || 0;
+        const _iSom    = parseFloat(p.ingreso_somar) || 0;
+        const _pctRid  = _baseEnv > 0 ? (_iRid / _baseEnv) * 100 : null;
+        const _pctSom  = _baseEnv > 0 ? (_iSom / _baseEnv) * 100 : null;
+        const _lblRid  = _pctRid === null ? 'Ingreso Rider' : `Ingreso Rider (${_pctRid.toFixed(0)}%)`;
+        const _lblSom  = _pctSom === null ? 'Ingreso Somar' : `Ingreso Somar (${_pctSom.toFixed(0)}%)`;
+        return [
+        [_lblRid, `<span style="color:var(--verde)">${fL(p.ingreso_delivery)}</span>`],
+        [_lblSom, `<span style="color:var(--or)">${fL(p.ingreso_somar)}</span>`],
+      ]; })().map(([l,v]) =>
         `<div style="display:flex;justify-content:space-between;padding:8px 12px;border-bottom:1px solid var(--g3);font-size:12px;">
           <span style="color:var(--td)">${l}</span><span>${v}</span>
         </div>`
       ).join('')}
     </div>
+
+    <!-- Documentos del pedido: ticket del comercio + QR de acceso -->
+    ${!['CANCELADO'].includes(p.estatus) ? `
+    <div style="font-size:10px;font-weight:700;color:var(--td);text-transform:uppercase;letter-spacing:.07em;margin-bottom:10px;">Documentos del Pedido</div>
+    <div style="background:var(--g2);border-radius:10px;overflow:hidden;margin-bottom:14px;border:1px solid var(--g4)">
+
+      <!-- Ticket del comercio (va junto al no. de orden) -->
+      <div style="padding:10px 14px;border-bottom:1px solid var(--g3)">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+          <span style="font-size:11px;color:var(--td)">🎫 Ticket del comercio</span>
+          <span class="mono" style="font-size:11px;color:var(--or)">${p.no_orden||'—'}</span>
+        </div>
+        ${p.ticket_comercio_path ? `
+          <img data-sbpath="${p.ticket_comercio_path}" data-sbbucket="pedidos-docs"
+            style="width:100%;max-height:220px;object-fit:contain;border-radius:8px;cursor:pointer;background:#111;display:block">
+          <div style="display:flex;gap:8px;margin-top:6px">
+            <label class="btn btn-ghost btn-sm" style="flex:1;justify-content:center;cursor:pointer">🔄 Reemplazar
+              <input type="file" accept="image/*" style="display:none" onchange="subirDocPedido('${p.id}','ticket',event)"></label>
+            <button class="btn btn-ghost btn-sm" style="flex:1;justify-content:center;color:var(--rj,#EF4444)" onclick="borrarDocPedido('${p.id}','ticket')">🗑 Quitar</button>
+          </div>
+        ` : `
+          <label style="display:flex;align-items:center;justify-content:center;gap:6px;background:var(--g3);border:1px dashed var(--g5);border-radius:8px;padding:14px;cursor:pointer;font-size:12px;color:var(--td)">
+            📎 Subir ticket del comercio
+            <input type="file" accept="image/*" style="display:none" onchange="subirDocPedido('${p.id}','ticket',event)">
+          </label>`}
+      </div>
+
+      <!-- QR de acceso a residencial -->
+      <div style="padding:10px 14px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+          <span style="font-size:11px;color:var(--td)">🔐 QR de acceso a residencial</span>
+          ${p.qr_acceso_path ? '<span style="font-size:9px;color:var(--am,#F59E0B)">se borra al finalizar</span>' : ''}
+        </div>
+        ${p.qr_acceso_borrado_at ? `
+          <div style="background:var(--g3);border-radius:8px;padding:10px;font-size:11px;color:var(--td);text-align:center">
+            🗑 QR eliminado al finalizar el pedido</div>
+        ` : p.qr_acceso_path ? `
+          <img data-sbpath="${p.qr_acceso_path}" data-sbbucket="pedidos-docs"
+            style="width:100%;max-height:220px;object-fit:contain;border-radius:8px;cursor:pointer;background:#111;display:block">
+          ${p.qr_acceso_nota ? `<div style="font-size:11px;color:var(--td);margin-top:6px">💬 ${p.qr_acceso_nota}</div>` : ''}
+          <div style="display:flex;gap:8px;margin-top:6px">
+            <label class="btn btn-ghost btn-sm" style="flex:1;justify-content:center;cursor:pointer">🔄 Reemplazar
+              <input type="file" accept="image/*" style="display:none" onchange="subirDocPedido('${p.id}','qr',event)"></label>
+            <button class="btn btn-ghost btn-sm" style="flex:1;justify-content:center;color:var(--rj,#EF4444)" onclick="borrarDocPedido('${p.id}','qr')">🗑 Quitar</button>
+          </div>
+        ` : `
+          <label style="display:flex;align-items:center;justify-content:center;gap:6px;background:var(--g3);border:1px dashed var(--g5);border-radius:8px;padding:14px;cursor:pointer;font-size:12px;color:var(--td)">
+            📎 Subir QR de acceso
+            <input type="file" accept="image/*" style="display:none" onchange="subirDocPedido('${p.id}','qr',event)">
+          </label>
+          <input id="qr-nota-${p.id}" placeholder="Nota para el rider (opcional): ej. portón principal"
+            style="width:100%;background:var(--g3);border:1px solid var(--g5);border-radius:8px;padding:8px;color:#fff;margin-top:6px;font-size:12px">`}
+      </div>
+    </div>
+    ` : ''}
 
     <!-- Factura del rider -->
     ${(p.monto_pagado_en_comercio > 0 || p.foto_factura_url) ? `
@@ -2948,6 +3011,8 @@ function renderPanel(p) {
   }
 
   // Footer con acciones
+  firmarImgs(document.getElementById('panel-body'));
+
   document.getElementById('panel-footer').innerHTML = `
     ${!['FINALIZADO','CANCELADO'].includes(p.estatus) ? `<button class="btn btn-danger" onclick="cancelarPedido('${p.id}')" style="flex:1;justify-content:center">Cancelar</button>` : ''}
     ${p.estatus === 'PENDIENTE' ? `<button class="btn btn-primary" onclick="cerrarPanel();abrirAsignar('${p.id}')" style="flex:2;justify-content:center">Asignar Rider</button>` : ''}
@@ -4262,7 +4327,7 @@ async function renderChatMsgs(dId) {
     const color = mine ? colorAgente(agente) : '#ccc';
     const hora = new Date(m.created_at).toLocaleTimeString('es-HN',{timeZone:'America/Tegucigalpa',hour:'2-digit',minute:'2-digit'});
     const imgHtml = m.imagen_url
-      ? `<div style="margin-top:${m.mensaje?'6px':'0'}"><img src="${m.imagen_url}" onclick="window.open('${m.imagen_url}')" style="max-width:220px;max-height:200px;border-radius:10px;display:block;cursor:pointer;object-fit:cover" loading="lazy"/></div>`
+      ? `<div style="margin-top:${m.mensaje?'6px':'0'}"><img data-sbpath="${m.imagen_url}" data-sbbucket="chat-docs" style="max-width:220px;max-height:200px;border-radius:10px;display:block;cursor:pointer;object-fit:cover" loading="lazy"/></div>`
       : '';
     const textoHtml = m.mensaje ? `<div>${m.mensaje}</div>` : '';
     return `<div style="display:flex;flex-direction:column;align-items:${mine?'flex-end':'flex-start'};max-width:80%;">
@@ -4273,6 +4338,7 @@ async function renderChatMsgs(dId) {
       <div style="font-size:10px;color:var(--td);margin-top:2px;padding:0 4px">${hora}</div>
     </div>`;
   }).join('');
+  firmarImgs(el);
   // Scroll al último mensaje (como WhatsApp)
   requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; });
 }
@@ -4291,16 +4357,10 @@ async function enviarMsg() {
   const agente = document.getElementById('u-name')?.textContent || 'Despacho';
   let imagen_url = null;
 
-  // Subir imagen a Cloudinary si hay
+  // Subir imagen a Supabase Storage (bucket privado chat-docs)
   if(file) {
-    const fd = new FormData();
-    fd.append('file', file);
-    fd.append('upload_preset', 'somar_riders');
-    fd.append('folder', 'chat');
     try {
-      const r = await fetch('https://api.cloudinary.com/v1_1/drkaxsziu/image/upload', {method:'POST', body:fd});
-      const data = await r.json();
-      imagen_url = data.secure_url;
+      imagen_url = await sbUpload('chat-docs', file, 'chat');
     } catch(e) { toast('Error subiendo imagen: ' + e.message, 'danger'); return; }
   }
 
@@ -4736,6 +4796,90 @@ function calcTarifa() {
   actualizarResumen();
 }
 
+// ════════════════════════════════════════════════════════════
+// STORAGE — Supabase (reemplaza Cloudinary)
+// Sube y devuelve el PATH (no URL). Los buckets son privados:
+// para mostrar hay que firmar con sbSignedUrl().
+// ════════════════════════════════════════════════════════════
+async function sbUpload(bucket, file, prefix='') {
+  if(!file) return null;
+  const ext  = (file.name.split('.').pop()||'jpg').toLowerCase().replace(/[^a-z0-9]/g,'');
+  const path = `${prefix?prefix+'/':''}${Date.now()}_${Math.random().toString(36).slice(2,8)}.${ext}`;
+  const { error } = await sb.storage.from(bucket).upload(path, file, {
+    cacheControl:'3600', upsert:false, contentType:file.type||'image/jpeg'
+  });
+  if(error) throw new Error(error.message);
+  return path;
+}
+
+// Firma un path privado para poder mostrarlo. ttl en segundos.
+async function sbSignedUrl(bucket, path, ttl=3600) {
+  if(!path) return null;
+  // Compatibilidad: si quedo guardada una URL completa (Cloudinary o Storage viejo), usarla tal cual
+  if(/^https?:\/\//i.test(path)) return path;
+  const { data, error } = await sb.storage.from(bucket).createSignedUrl(path, ttl);
+  if(error) { console.warn('[signedUrl]', bucket, path, error.message); return null; }
+  return data?.signedUrl || null;
+}
+
+// Firma en diferido las imagenes de buckets privados ya renderizadas.
+// Uso: <img data-sbpath="path" data-sbbucket="bucket">
+async function firmarImgs(scope) {
+  const els = (scope||document).querySelectorAll('img[data-sbpath]:not([data-sbdone])');
+  for(const el of els){
+    el.setAttribute('data-sbdone','1');
+    const url = await sbSignedUrl(el.getAttribute('data-sbbucket'), el.getAttribute('data-sbpath'), 3600);
+    if(url){ el.src = url; el.onclick = () => window.open(url); }
+    else { el.style.display='none'; }
+  }
+}
+
+// ── Documentos del pedido: ticket del comercio y QR de acceso ──
+async function subirDocPedido(pedidoId, tipo, event) {
+  const file = event.target.files[0];
+  if(!file) return;
+  const campo = tipo === 'qr' ? 'qr_acceso_path' : 'ticket_comercio_path';
+  const pref  = tipo === 'qr' ? 'qr' : 'ticket';
+  try {
+    // Si ya habia uno, borrar el anterior para no dejar huerfanos
+    const { data: prev } = await sb.from('pedidos').select(campo).eq('id', pedidoId).single();
+    const anterior = prev?.[campo];
+
+    const path = await sbUpload('pedidos-docs', file, `${pref}/${pedidoId}`);
+    const upd  = { [campo]: path };
+    if(tipo === 'qr') {
+      const nota = document.getElementById('qr-nota-'+pedidoId)?.value?.trim();
+      if(nota) upd.qr_acceso_nota = nota;
+    }
+    const { error } = await sb.from('pedidos').update(upd).eq('id', pedidoId);
+    if(error) throw new Error(error.message);
+
+    if(anterior && !/^https?:\/\//i.test(anterior)) {
+      await sb.storage.from('pedidos-docs').remove([anterior]);
+    }
+    toast(tipo==='qr' ? '✅ QR de acceso subido' : '✅ Ticket subido');
+    abrirPanel(pedidoId);
+  } catch(e) { toast('Error: '+e.message, 'danger'); }
+}
+
+async function borrarDocPedido(pedidoId, tipo) {
+  const campo = tipo === 'qr' ? 'qr_acceso_path' : 'ticket_comercio_path';
+  if(!confirm(tipo==='qr' ? '¿Quitar el QR de acceso?' : '¿Quitar el ticket del comercio?')) return;
+  try {
+    const { data: prev } = await sb.from('pedidos').select(campo).eq('id', pedidoId).single();
+    const path = prev?.[campo];
+    const upd = { [campo]: null };
+    if(tipo === 'qr') upd.qr_acceso_nota = null;
+    const { error } = await sb.from('pedidos').update(upd).eq('id', pedidoId);
+    if(error) throw new Error(error.message);
+    if(path && !/^https?:\/\//i.test(path)) {
+      await sb.storage.from('pedidos-docs').remove([path]);
+    }
+    toast('🗑 Documento quitado');
+    abrirPanel(pedidoId);
+  } catch(e) { toast('Error: '+e.message, 'danger'); }
+}
+
 async function validarCupon() {
   const codigo = document.getElementById('f-cupon')?.value?.trim();
   const statusEl = document.getElementById('cupon-status');
@@ -4869,6 +5013,7 @@ async function guardarPedido() {
     'sv-prod-inp','sv-propina-inp'].forEach(id => { const el=document.getElementById(id); if(el)el.value=''; });
   const envioInp=document.getElementById('sv-envio-inp'); if(envioInp) envioInp.value='50';
   S.tarifaBase = null;
+  S.tarifaManual = false;
   _wizCliSel=null; _wizComSel=null; _wizProductos=[]; _wizAllProds=[]; _wizCatsCache=[];
   document.getElementById('cli-seleccionado').style.display='none';
   document.getElementById('com-suc-grp').style.display='none';
@@ -5401,6 +5546,14 @@ async function wizCalcularTarifa() {
     if(det) det.innerHTML = `Sin GPS — tarifa mínima: <b style="color:var(--or)">L. ${tarifa.toFixed(0)}</b>`;
   }
 
+  // Si Despacho fijó la tarifa a mano, NO pisarla: solo mostrar la sugerida.
+  if(S.tarifaManual) {
+    const det = document.getElementById('tarifa-detalle');
+    if(det) det.innerHTML += ` <span style="color:var(--or);font-size:10px">· ✏️ tarifa manual L. ${(parseFloat(document.getElementById('sv-envio-inp')?.value)||0).toFixed(0)} (sugerida L. ${tarifa.toFixed(0)})</span>`;
+    actualizarResumen();
+    return;
+  }
+
   // Guardar la base SIN recargo: es la referencia para cambiar de condición
   S.tarifaBase = tarifa;
 
@@ -5413,6 +5566,20 @@ async function wizCalcularTarifa() {
   const inp = document.getElementById('sv-envio-inp');
   if(inp) inp.value = tarifa.toFixed(2);
   actualizarResumen();
+}
+
+// Muestra el aviso de tarifa manual + boton para volver al calculo automatico
+function marcarTarifaManual() {
+  const det = document.getElementById('tarifa-detalle');
+  if(det && !document.getElementById('btn-tarifa-auto')) {
+    det.innerHTML = `✏️ <b style="color:var(--or)">Tarifa manual</b> · <span id="btn-tarifa-auto" style="color:var(--td);text-decoration:underline;cursor:pointer" onclick="resetTarifaAuto()">volver al cálculo automático</span>`;
+  }
+}
+
+function resetTarifaAuto() {
+  S.tarifaManual = false;
+  S.tarifaBase   = null;
+  wizCalcularTarifa();
 }
 
 function wizCiudadCambio() { wizCalcularTarifa(); }
@@ -6476,9 +6643,7 @@ async function liquidar(liqId) {
   if(!file){toast('Selecciona el comprobante','danger');return;}
   let comp_url='';
   try {
-    const fd=new FormData();fd.append('file',file);fd.append('upload_preset','somar_riders');fd.append('folder','comprobantes');
-    const r=await fetch('https://api.cloudinary.com/v1_1/drkaxsziu/image/upload',{method:'POST',body:fd});
-    comp_url=(await r.json()).secure_url;
+    comp_url = await sbUpload('pagos-docs', file, 'liquidaciones');
   } catch(e){toast('Error subiendo imagen: '+e.message,'danger');return;}
   const {error}=await sb.rpc('liquidar_pedido',{p_liq_id:liqId,p_comprobante:comp_url,p_notas:'',p_liquidado_por:document.getElementById('u-name')?.textContent||'Despacho'});
   if(error){toast('Error: '+error.message,'danger');return;}
@@ -6496,7 +6661,7 @@ async function cargarComprobantes(estatus='PENDIENTE') {
   const el=document.getElementById('comp-lista');
   if(!el) return;
   el.innerHTML='<div class="empty">Cargando...</div>';
-  let q=sb.from('pedidos').select('id,no_orden,nombre_cliente,nombre_comercio,subtotal,tarifa_envio,monto_cobrar,metodo_pago,imagen_transferencia,transferencia_validada_por,delivery_id,estatus,created_at')
+  let q=sb.from('pedidos').select('id,no_orden,nombre_cliente,nombre_comercio,subtotal,tarifa_envio,monto_cobrar,metodo_pago,imagen_transferencia,transferencia_validada_por,delivery_id,estatus,created_at,cliente_id,transferencia_id,transferencias_cliente(id,monto_total,imagen_url,referencia_banco,comentario,validada_por)')
     .eq('eliminado',false).in('metodo_pago',['TRANSFERENCIA','TARJETA']).eq('estatus','FINALIZADO').order('created_at',{ascending:false}).limit(50);
   if(estatus==='PENDIENTE') q=q.is('transferencia_validada_por',null);
   else if(estatus==='APROBADO') q=q.not('transferencia_validada_por','is',null);
@@ -6506,7 +6671,61 @@ async function cargarComprobantes(estatus='PENDIENTE') {
   if(estatus==='PENDIENTE'&&badge){badge.textContent=data?.length||0;badge.style.display=data?.length?'inline':'none';}
   if(!data?.length){el.innerHTML='<div class="empty" style="grid-column:1/-1">Sin comprobantes</div>';return;}
   const fL=v=>'L. '+parseFloat(v||0).toFixed(2);
-  el.innerHTML=data.map(p=>{
+  S.compData = data;
+
+  // Agrupar: los pedidos con transferencia_id se juntan en una sola tarjeta
+  const grupos = [], sueltos = [], mapG = {};
+  data.forEach(p=>{
+    if(p.transferencia_id && p.transferencias_cliente){
+      if(!mapG[p.transferencia_id]){ mapG[p.transferencia_id]={t:p.transferencias_cliente, pedidos:[]}; grupos.push(mapG[p.transferencia_id]); }
+      mapG[p.transferencia_id].pedidos.push(p);
+    } else sueltos.push(p);
+  });
+
+  const cardGrupo = g => {
+    const t = g.t;
+    const suma = g.pedidos.reduce((a,p)=>a+parseFloat(p.monto_cobrar||0),0);
+    const dif  = suma - parseFloat(t.monto_total||0);
+    const cuadra = Math.abs(dif) < 0.01;
+    const aprob = !!t.validada_por;
+    return `<div style="background:var(--g2);border:1px solid ${aprob?'rgba(34,197,94,.3)':'var(--or)'};border-radius:14px;overflow:hidden">
+      <div style="padding:12px 14px;border-bottom:1px solid var(--g4);display:flex;justify-content:space-between;align-items:center">
+        <div>
+          <div class="mono" style="font-size:10px;color:var(--or);letter-spacing:.06em">🔗 TRANSFERENCIA · ${g.pedidos.length} PEDIDOS</div>
+          <div style="font-size:13px;font-weight:700">${g.pedidos[0].nombre_cliente||'—'}</div>
+          ${t.referencia_banco?`<div class="mono" style="font-size:11px;color:var(--td)">Ref: ${t.referencia_banco}</div>`:''}
+        </div>
+        <div style="text-align:right">
+          <div style="font-size:18px;font-weight:900;color:var(--or)">${fL(t.monto_total)}</div>
+          <div class="mono" style="font-size:10px;color:${cuadra?'#22C55E':'var(--rj,#EF4444)'}">${cuadra?'✓ CUADRA':'⚠ DIF '+fL(dif)}</div>
+        </div>
+      </div>
+      <div style="padding:12px 14px">
+        <div style="background:var(--g3);border-radius:8px;padding:8px 10px;margin-bottom:10px">
+          ${g.pedidos.map(p=>`<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0">
+            <span class="mono" style="color:var(--or)">${p.no_orden||'—'}</span>
+            <span>${fL(p.monto_cobrar)}</span></div>`).join('')}
+          <div style="display:flex;justify-content:space-between;font-size:12px;padding-top:6px;margin-top:4px;border-top:1px solid var(--g4);font-weight:700">
+            <span style="color:var(--td)">Suma pedidos</span><span>${fL(suma)}</span></div>
+        </div>
+        ${t.comentario?`<div style="background:rgba(255,140,0,.08);border-left:2px solid var(--or);border-radius:6px;padding:8px 10px;margin-bottom:10px;font-size:12px;color:var(--td)">💬 ${t.comentario}</div>`:''}
+        ${t.imagen_url?`<img data-sbpath="${t.imagen_url}" data-sbbucket="pagos-docs" style="width:100%;max-height:180px;object-fit:contain;border-radius:10px;cursor:pointer;background:#111;margin-bottom:10px">`:
+          `<div style="background:var(--g3);border:1px dashed var(--g5);border-radius:10px;padding:16px;text-align:center;font-size:12px;color:var(--td);margin-bottom:10px">📎 Sin comprobante</div>`}
+        <div style="display:flex;gap:8px;margin-bottom:8px">
+          <button class="btn btn-sm" style="flex:1;justify-content:center;background:var(--g3);color:var(--td)" onclick="abrirAgrupar('${t.id}')">✏️ Editar</button>
+          <button class="btn btn-sm" style="flex:1;justify-content:center;background:var(--g3);color:var(--td)" onclick="desagruparTransf('${t.id}')">🔓 Desagrupar</button>
+        </div>
+        ${aprob?
+          `<div style="background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.3);border-radius:8px;padding:8px 12px;font-size:12px;color:#22C55E">✅ Validado por ${t.validada_por}</div>`:
+          `<div style="display:flex;gap:8px">
+            <button class="btn btn-success" style="flex:1;justify-content:center" onclick="validarGrupo('${t.id}',true)">✅ Aprobar</button>
+            <button class="btn btn-danger" style="flex:1;justify-content:center" onclick="validarGrupo('${t.id}',false)">❌ Rechazar</button>
+          </div>`}
+      </div>
+    </div>`;
+  };
+
+  const cardSuelto = p => {
     const aprobado=!!p.transferencia_validada_por;
     return `<div style="background:var(--g2);border:1px solid ${aprobado?'rgba(34,197,94,.3)':'var(--g4)'};border-radius:14px;overflow:hidden">
       <div style="padding:12px 14px;border-bottom:1px solid var(--g4);display:flex;justify-content:space-between;align-items:center">
@@ -6521,10 +6740,11 @@ async function cargarComprobantes(estatus='PENDIENTE') {
         </div>
       </div>
       <div style="padding:12px 14px">
-        ${p.imagen_transferencia?`<img src="${p.imagen_transferencia}" onclick="window.open('${p.imagen_transferencia}')" style="width:100%;max-height:180px;object-fit:contain;border-radius:10px;cursor:pointer;background:#111;margin-bottom:10px">`:
+        ${p.imagen_transferencia?`<img data-sbpath="${p.imagen_transferencia}" data-sbbucket="pagos-docs" style="width:100%;max-height:180px;object-fit:contain;border-radius:10px;cursor:pointer;background:#111;margin-bottom:10px">`:
         `<div style="background:var(--g3);border:1px dashed var(--g5);border-radius:10px;padding:16px;text-align:center;font-size:12px;color:var(--td);margin-bottom:10px">📎 Sin comprobante
           <br><label style="color:var(--or);cursor:pointer;margin-top:4px;display:inline-block">Subir<input type="file" accept="image/*" style="display:none" onchange="subirComprobante('${p.id}',event)"></label>
         </div>`}
+        ${!aprobado?`<button class="btn btn-sm" style="width:100%;justify-content:center;background:var(--g3);color:var(--or);border:1px solid var(--or);margin-bottom:8px" onclick="abrirAgrupar(null,'${p.id}')">🔗 Agrupar con otros pedidos</button>`:''}
         ${aprobado?
           `<div style="background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.3);border-radius:8px;padding:8px 12px;font-size:12px;color:#22C55E">✅ Validado por ${p.transferencia_validada_por}</div>`:
           `<div style="display:flex;gap:8px">
@@ -6533,7 +6753,10 @@ async function cargarComprobantes(estatus='PENDIENTE') {
           </div>`}
       </div>
     </div>`;
-  }).join('');
+  };
+
+  el.innerHTML = grupos.map(cardGrupo).join('') + sueltos.map(cardSuelto).join('');
+  firmarImgs(el);
 }
 function filtComp(btn,estatus) {
   document.querySelectorAll('#view-comprobantes .filter-bar .fbtn').forEach(b=>b.classList.remove('active'));
@@ -6542,12 +6765,123 @@ function filtComp(btn,estatus) {
 async function subirComprobante(pedidoId,event) {
   const file=event.target.files[0]; if(!file) return;
   try {
-    const fd=new FormData();fd.append('file',file);fd.append('upload_preset','somar_riders');fd.append('folder','comprobantes');
-    const r=await fetch('https://api.cloudinary.com/v1_1/drkaxsziu/image/upload',{method:'POST',body:fd});
-    await sb.from('pedidos').update({imagen_transferencia:(await r.json()).secure_url}).eq('id',pedidoId);
+    const path = await sbUpload('pagos-docs', file, 'comprobantes');
+    await sb.from('pedidos').update({imagen_transferencia:path}).eq('id',pedidoId);
     toast('✅ Comprobante subido'); cargarComprobantes();
   } catch(e){toast('Error: '+e.message,'danger');}
 }
+// ── Agrupacion de transferencias de cliente ──
+var _agrSel = [], _agrTid = null;
+
+function abrirAgrupar(transfId, pedidoBase) {
+  _agrTid = transfId || null;
+  const data = S.compData || [];
+  let cliId = null, t = null;
+  if(transfId){
+    const p0 = data.find(p=>p.transferencia_id===transfId);
+    cliId = p0?.cliente_id; t = p0?.transferencias_cliente;
+    _agrSel = data.filter(p=>p.transferencia_id===transfId).map(p=>p.id);
+  } else {
+    const pb = data.find(p=>p.id===pedidoBase);
+    cliId = pb?.cliente_id; _agrSel = [pedidoBase];
+  }
+  // candidatos: mismo cliente, sin validar, libres o del mismo grupo
+  const cand = data.filter(p=>
+    p.cliente_id && p.cliente_id===cliId && !p.transferencia_validada_por &&
+    (!p.transferencia_id || p.transferencia_id===transfId));
+  if(cand.length<2 && !transfId){ toast('No hay otros pedidos sin agrupar de este cliente','danger'); return; }
+
+  const fL=v=>'L. '+parseFloat(v||0).toFixed(2);
+  const body = `
+    <div style="font-size:12px;color:var(--td);margin-bottom:10px">Marca los pedidos que cubre esta transferencia.</div>
+    <div id="agr-lista" style="max-height:240px;overflow-y:auto;background:var(--g3);border-radius:8px;padding:6px;margin-bottom:12px">
+      ${cand.map(p=>`
+        <label style="display:flex;align-items:center;gap:10px;padding:8px;border-radius:6px;cursor:pointer">
+          <input type="checkbox" value="${p.id}" ${_agrSel.includes(p.id)?'checked':''} onchange="agrToggle(this)" style="width:16px;height:16px;accent-color:var(--or)">
+          <span class="mono" style="font-size:11px;color:var(--or);flex:1">${p.no_orden||'—'}</span>
+          <span style="font-size:12px">${fL(p.monto_cobrar)}</span>
+        </label>`).join('')}
+    </div>
+    <div style="display:flex;justify-content:space-between;font-size:12px;padding:8px 10px;background:var(--g3);border-radius:8px;margin-bottom:12px">
+      <span style="color:var(--td)">Suma seleccionada</span><strong id="agr-suma" style="color:var(--or)">L. 0.00</strong>
+    </div>
+    <label style="font-size:11px;color:var(--td);text-transform:uppercase;letter-spacing:.06em">Monto total transferido (L.)</label>
+    <input id="agr-monto" type="number" step="0.01" value="${t?.monto_total??''}" placeholder="150.00" style="width:100%;background:var(--g3);border:1px solid var(--g5);border-radius:8px;padding:10px;color:#fff;margin:4px 0 10px;font-size:14px">
+    <label style="font-size:11px;color:var(--td);text-transform:uppercase;letter-spacing:.06em">Referencia bancaria</label>
+    <input id="agr-ref" value="${t?.referencia_banco||''}" placeholder="Opcional" style="width:100%;background:var(--g3);border:1px solid var(--g5);border-radius:8px;padding:10px;color:#fff;margin:4px 0 10px;font-size:14px">
+    <label style="font-size:11px;color:var(--td);text-transform:uppercase;letter-spacing:.06em">💬 Comentario</label>
+    <textarea id="agr-com" rows="2" placeholder="Ej: L.150 cubre ambos envios en una sola transferencia" style="width:100%;background:var(--g3);border:1px solid var(--g5);border-radius:8px;padding:10px;color:#fff;margin:4px 0 10px;font-size:13px;resize:vertical">${t?.comentario||''}</textarea>
+    <label style="display:flex;align-items:center;gap:6px;background:var(--g3);border:1px dashed var(--g5);border-radius:8px;padding:10px;cursor:pointer;font-size:12px;color:var(--td);margin-bottom:12px">
+      📎 <span id="agr-lbl">${t?.imagen_url?'Reemplazar comprobante...':'Seleccionar comprobante...'}</span>
+      <input type="file" accept="image/*" id="agr-file" style="display:none" onchange="document.getElementById('agr-lbl').textContent=this.files[0]?.name||''">
+    </label>
+    <button class="btn btn-success" style="width:100%;justify-content:center" onclick="guardarAgrupar()">💾 Guardar agrupación</button>`;
+  document.getElementById('agr-body').innerHTML = body;
+  document.getElementById('modal-agrupar').style.display = 'flex';
+  agrSuma();
+}
+
+function agrToggle(cb){
+  if(cb.checked){ if(!_agrSel.includes(cb.value)) _agrSel.push(cb.value); }
+  else _agrSel = _agrSel.filter(x=>x!==cb.value);
+  agrSuma();
+}
+
+function agrSuma(){
+  const data = S.compData||[];
+  const s = _agrSel.reduce((a,id)=>a+parseFloat(data.find(p=>p.id===id)?.monto_cobrar||0),0);
+  const el = document.getElementById('agr-suma');
+  if(el) el.textContent = 'L. '+s.toFixed(2);
+}
+
+async function guardarAgrupar(){
+  if(_agrSel.length<2){ toast('Selecciona al menos 2 pedidos','danger'); return; }
+  const monto = parseFloat(document.getElementById('agr-monto')?.value||0);
+  if(!monto || monto<=0){ toast('Indica el monto total transferido','danger'); return; }
+  let img = null;
+  const f = document.getElementById('agr-file')?.files?.[0];
+  if(f){
+    try{
+      img = await sbUpload('pagos-docs', f, 'transferencias');
+    }catch(e){ toast('Error subiendo imagen: '+e.message,'danger'); return; }
+  }
+  const {error}=await sb.rpc('agrupar_transferencia',{
+    p_pedido_ids: _agrSel,
+    p_monto_total: monto,
+    p_imagen_url: img,
+    p_referencia: document.getElementById('agr-ref')?.value?.trim()||null,
+    p_comentario: document.getElementById('agr-com')?.value?.trim()||null,
+    p_agente: document.getElementById('u-name')?.textContent||'Despacho',
+    p_transf_id: _agrTid
+  });
+  if(error){ toast('Error: '+error.message,'danger'); return; }
+  toast('✅ Transferencia agrupada');
+  document.getElementById('modal-agrupar').style.display='none';
+  cargarComprobantes('PENDIENTE');
+}
+
+async function desagruparTransf(tid){
+  if(!confirm('¿Desagrupar esta transferencia? Los pedidos volverán a quedar sueltos.')) return;
+  const {error}=await sb.rpc('desagrupar_transferencia',{
+    p_transf_id:tid, p_agente:document.getElementById('u-name')?.textContent||'Despacho'});
+  if(error){ toast('Error: '+error.message,'danger'); return; }
+  toast('🔓 Desagrupado'); cargarComprobantes('PENDIENTE');
+}
+
+async function validarGrupo(tid,aprobado){
+  const agente=document.getElementById('u-name')?.textContent||'Despacho';
+  const val = aprobado?agente:'RECHAZADO_'+agente;
+  const {error:e1}=await sb.from('transferencias_cliente').update({
+    validada_por:val, validada_at:new Date().toISOString()}).eq('id',tid);
+  if(e1){ toast('Error: '+e1.message,'danger'); return; }
+  const {error:e2}=await sb.from('pedidos').update({
+    transferencia_validada_por:val, mt_aprobacion_trans:new Date().toISOString()
+  }).eq('transferencia_id',tid);
+  if(e2){ toast('Error: '+e2.message,'danger'); return; }
+  toast(aprobado?'✅ Transferencia aprobada':'❌ Rechazada');
+  cargarComprobantes('PENDIENTE');
+}
+
 async function validarTransferencia(pedidoId,aprobado) {
   const agente=document.getElementById('u-name')?.textContent||'Despacho';
   const {error}=await sb.from('pedidos').update({
@@ -8315,6 +8649,15 @@ window.addEventListener('popstate', e => {
   </div>
 </div>
 <!-- ═══ MODAL NUEVO EGRESO ══════════════════════════════════ -->
+<div id="modal-agrupar" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:600;align-items:center;justify-content:center;padding:12px" onclick="if(event.target===this)this.style.display='none'">
+  <div style="background:var(--g2);border:1px solid var(--g4);border-radius:16px;width:100%;max-width:420px;max-height:90vh;overflow-y:auto">
+    <div style="padding:14px 16px;border-bottom:1px solid var(--g4);display:flex;justify-content:space-between;align-items:center">
+      <strong style="font-size:14px">🔗 Agrupar transferencia</strong>
+      <span style="cursor:pointer;color:var(--td);font-size:20px;line-height:1" onclick="document.getElementById('modal-agrupar').style.display='none'">&times;</span>
+    </div>
+    <div id="agr-body" style="padding:16px"></div>
+  </div>
+</div>
 <div id="modal-egreso" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:600;align-items:center;justify-content:center;padding:12px" onclick="if(event.target===this)this.style.display='none'">
   <div style="background:var(--g1);border:1px solid var(--g4);border-radius:18px;width:100%;max-width:600px;max-height:94vh;overflow:hidden;display:flex;flex-direction:column">
     <div style="padding:14px 18px;border-bottom:1px solid var(--g4);display:flex;justify-content:space-between;align-items:center;flex-shrink:0">
