@@ -160,6 +160,11 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-s
 .rend-bar > i{display:block;height:100%;background:linear-gradient(90deg,var(--green),#22c55e)}
 .rend-margen{text-align:center;padding:6px;font-size:13px;color:var(--txt-dim)}
 .rend-margen b{font-size:22px;color:var(--txt);display:block;font-weight:800}
+.rend-info{margin-top:6px;padding:12px 14px;border:1px dashed var(--line);border-radius:10px;background:var(--panel-2)}
+.rend-info .ri-title{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--txt-mute);font-weight:700;margin-bottom:8px}
+.rend-info .ri-row{display:flex;justify-content:space-between;align-items:center;font-size:13px;color:var(--txt-dim);padding:3px 0}
+.rend-info .ri-row b{font-weight:700;color:var(--txt)}
+.rend-info .ri-row b.neg{color:var(--red)}
 .bal-cuentas{margin-top:22px;border-top:1px solid var(--line);padding-top:18px}
 .cuentas-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px}
 .cuenta-tile{background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
@@ -355,17 +360,20 @@ function render(){renderKPIs();renderBalances();renderDias();}
 
 function renderKPIs(){
   const act=S.movimientos.filter(m=>!m.anulado);
-  const ingBanco=act.filter(m=>m.cuenta_id!=null).reduce((s,m)=>s+ +m.ingreso,0);
-  const egrBanco=act.filter(m=>m.cuenta_id!=null).reduce((s,m)=>s+ +m.egreso,0);
-  const cEnvio=act.filter(m=>m.fuente==='ingreso_operativo').reduce((s,m)=>s+ +m.comision_envio,0);
-  const cProd=act.filter(m=>m.fuente==='ingreso_operativo').reduce((s,m)=>s+ +m.comision_producto,0);
-  const devengo=cEnvio+cProd;
+  // Egresos operativos reales (excluye pasamanos LIQR)
+  const egrOper=act.filter(m=>m.naturaleza==='EGRESO').reduce((s,m)=>s+ +m.egreso,0);
+  const cEnvio=act.filter(m=>m.sigla==='COM').reduce((s,m)=>s+ +m.comision_envio,0);
+  const cProd=act.filter(m=>m.sigla==='COM').reduce((s,m)=>s+ +m.comision_producto,0);
+  const comBruta=cEnvio+cProd;
+  const ajp=act.filter(m=>m.sigla==='AJP').reduce((s,m)=>s+ +m.ingreso,0); // negativo
+  const comReal=comBruta+ajp;
+  const utilidad=comReal-egrOper;
   const saldoTotal=S.cuentas.reduce((s,c)=>s+ +c.saldo_actual,0);
   const kpis=[
     {cls:'',label:'Saldo total en cuentas',val:fmtL(saldoTotal),sub:S.cuentas.length+' cuentas activas'},
-    {cls:'ing',label:'Ingresos a caja',val:fmtL(ingBanco),sub:'Depósitos + ingresos'},
-    {cls:'egr',label:'Egresos',val:fmtL(egrBanco),sub:'Gastos y pagos'},
-    {cls:'util',label:'Comisión devengada',val:fmtL(devengo),sub:'Envío '+fmtL(cEnvio)+' · Prod '+fmtL(cProd)},
+    {cls:'util',label:'Comisión real',val:fmtL(comReal),sub:ajp?('Bruta '+fmtL(comBruta)+' · Cortesía '+fmtL(ajp)):('Envío '+fmtL(cEnvio)+' · Prod '+fmtL(cProd))},
+    {cls:'egr',label:'Egresos operativos',val:fmtL(egrOper),sub:'Gastos reales (sin liquidaciones)'},
+    {cls:(utilidad<0?'egr':'ing'),label:'Utilidad operativa',val:fmtL(utilidad),sub:comReal>0?((utilidad/comReal*100).toFixed(1)+'% margen'):'—'},
   ];
   document.getElementById('kpiStrip').innerHTML=kpis.map(k=>`<div class="kpi ${k.cls}"><div class="k-label">${k.label}</div><div class="k-value">${k.val}</div><div class="k-sub">${k.sub}</div></div>`).join('');
 }
@@ -394,14 +402,25 @@ function renderBalances(){
       <td class="r" style="color:${neto<0?'var(--red)':'var(--txt)'}">${fmtL(neto)}</td></tr>`;
   }).join('');
 
-  // Rendimiento: ingresos reales a caja vs egresos (banco), + devengo aparte
-  const ingBanco=vis.filter(m=>m.cuenta_id!=null).reduce((s,m)=>s+ +m.ingreso,0);
-  const egrBanco=vis.filter(m=>m.cuenta_id!=null).reduce((s,m)=>s+ +m.egreso,0);
-  const devengo=vis.filter(m=>m.fuente==='ingreso_operativo').reduce((s,m)=>s+ +m.ingreso,0);
-  // Utilidad operativa: devengo (ganancia real del negocio) - egresos
-  const utilidad=devengo-egrBanco;
-  const margen=devengo>0?(utilidad/devengo*100):0;
-  const barPct=Math.max(0,Math.min(100,margen));
+  // ── RENDIMIENTO — modelo contable correcto ──
+  // Utilidad = comisión devengada REAL (COM − AJP cortesía) − egresos operativos reales.
+  // El pasamanos (TRC/LIQR) y el aporte de capital (AF) NO son resultado operativo.
+  const sum=(pred,campo)=>vis.filter(pred).reduce((s,m)=>s+ +m[campo],0);
+
+  const comBruta   = sum(m=>m.sigla==='COM','ingreso');                 // comisión devengada bruta
+  const ajusteProm = sum(m=>m.sigla==='AJP','ingreso');                 // negativo (contra-ingreso)
+  const comReal    = comBruta + ajusteProm;                            // ingreso operativo real
+  const ingExtra   = sum(m=>m.naturaleza==='INGRESO' && m.sigla!=='COM' && m.sigla!=='AF','ingreso'); // otros ingresos operativos (IE, etc.)
+  const ingresoOper= comReal + ingExtra;
+  const egrOper    = sum(m=>m.naturaleza==='EGRESO','egreso');          // egresos reales (excluye LIQR/pasamanos)
+  const utilidad   = ingresoOper - egrOper;
+  const margen     = ingresoOper>0?(utilidad/ingresoOper*100):0;
+  const barPct     = Math.max(0,Math.min(100,margen));
+
+  // Partidas informativas (fuera del resultado)
+  const pasaIn  = sum(m=>m.naturaleza==='PASAMANOS','ingreso');         // TRC recibido de clientes
+  const pasaOut = sum(m=>m.naturaleza==='PASAMANOS','egreso');          // LIQR pagado a riders
+  const capital = sum(m=>m.sigla==='AF','ingreso');                     // aporte de fondos
 
   document.getElementById('balancesModulo').innerHTML=`
   <div class="bal-modulo"><div class="bal-card">
@@ -418,16 +437,25 @@ function renderBalances(){
         </table>
       </div>
       <div>
-        <div class="bal-sub">Rendimiento</div>
+        <div class="bal-sub">Estado de resultados (operativo)</div>
         <div class="rend-grid">
-          <div class="rend-row ing"><span class="rl">Comisión devengada (ingreso real)</span><span class="rv">${fmtL(devengo)}</span></div>
-          <div class="rend-row egr"><span class="rl">Egresos operativos</span><span class="rv">${fmtL(egrBanco)}</span></div>
-          <div class="rend-row util"><span class="rl">Utilidad neta</span><span class="rv">${fmtL(utilidad)}</span></div>
+          <div class="rend-row ing"><span class="rl">Comisión devengada</span><span class="rv">${fmtL(comBruta)}</span></div>
+          ${ajusteProm?`<div class="rend-row" style="background:var(--purple);color:#fff"><span class="rl">(−) Comisión sobre saldo de cortesía</span><span class="rv">${fmtL(ajusteProm)}</span></div>`:''}
+          ${ingExtra?`<div class="rend-row ing"><span class="rl">Otros ingresos operativos</span><span class="rv">${fmtL(ingExtra)}</span></div>`:''}
+          <div class="rend-row" style="background:var(--panel-3);font-weight:700"><span class="rl">Ingreso operativo real</span><span class="rv">${fmtL(ingresoOper)}</span></div>
+          <div class="rend-row egr"><span class="rl">(−) Egresos operativos</span><span class="rv">${fmtL(egrOper)}</span></div>
+          <div class="rend-row util"><span class="rl">Utilidad operativa</span><span class="rv">${fmtL(utilidad)}</span></div>
           <div>
-            <div class="rend-margen">Margen de utilidad<b>${margen.toFixed(1)}%</b></div>
+            <div class="rend-margen">Margen operativo<b>${margen.toFixed(1)}%</b></div>
             <div class="rend-bar"><i style="width:${barPct}%"></i></div>
           </div>
-          <div style="font-size:12px;color:var(--txt-mute);text-align:center;margin-top:4px">Depósitos recibidos a caja en el período: <b style="color:var(--txt)">${fmtL(ingBanco)}</b></div>
+          <div class="rend-info">
+            <div class="ri-title">Partidas fuera del resultado</div>
+            <div class="ri-row"><span>Recaudado de clientes (pasamanos)</span><b>${fmtL(pasaIn)}</b></div>
+            <div class="ri-row"><span>Liquidado a riders (pasamanos)</span><b>${fmtL(pasaOut)}</b></div>
+            <div class="ri-row"><span>Neto en tránsito</span><b class="${(pasaIn-pasaOut)<0?'neg':''}">${fmtL(pasaIn-pasaOut)}</b></div>
+            ${capital?`<div class="ri-row"><span>Aporte de capital</span><b>${fmtL(capital)}</b></div>`:''}
+          </div>
         </div>
       </div>
     </div>
@@ -548,17 +576,27 @@ function renderBloqueCuenta(cid,movs,fecha){
 
 function renderBloqueDevengo(movs){
   const act=movs.filter(m=>!m.anulado);
-  const totEnvio=act.reduce((s,m)=>s+ +m.comision_envio,0);
-  const totProd=act.reduce((s,m)=>s+ +m.comision_producto,0);
-  const tot=totEnvio+totProd;
-  const rows=movs.map(m=>`<tr class="mov-row auto ${m.anulado?'anulado':''}" data-id="${esc(m.mov_id)}">
-    <td><span class="sigla" style="background:#16a34a">COM</span></td>
-    <td><span class="desc">${esc(m.descripcion)}${m.nombre_cliente||m.nombre_rider?`<span class="desc-meta">👤 ${esc(m.nombre_cliente||'—')} · 🏍 ${esc(m.nombre_rider||'—')}</span>`:''}<span class="mov-time">🕐 Reg: ${esc(fechaHoraHN(m.created_at))}</span></span></td>
-    <td class="r"><span class="mv-ing num">${fmtN(m.ingreso)}</span></td>
-    <td class="r"></td><td class="r"></td></tr>`).join('');
+  const totEnvio=act.filter(m=>m.sigla==='COM').reduce((s,m)=>s+ +m.comision_envio,0);
+  const totProd =act.filter(m=>m.sigla==='COM').reduce((s,m)=>s+ +m.comision_producto,0);
+  const totAjp  =act.filter(m=>m.sigla==='AJP').reduce((s,m)=>s+ +m.ingreso,0); // negativo
+  const totCom  =totEnvio+totProd;
+  const tot     =totCom+totAjp; // neto real
+  const rows=movs.map(m=>{
+    const esAjp=m.sigla==='AJP';
+    const color=esAjp?'#a855f7':'#16a34a';
+    const valCls=esAjp?'mv-egr':'mv-ing';
+    const metaHtml=(m.nombre_cliente||m.nombre_rider)&&!esAjp
+      ?`<span class="desc-meta">👤 ${esc(m.nombre_cliente||'—')} · 🏍 ${esc(m.nombre_rider||'—')}</span>`:'';
+    return `<tr class="mov-row auto ${m.anulado?'anulado':''}" data-id="${esc(m.mov_id)}">
+    <td><span class="sigla" style="background:${color}">${esc(m.sigla)}</span></td>
+    <td><span class="desc">${esc(m.descripcion)}${metaHtml}<span class="mov-time">🕐 Reg: ${esc(fechaHoraHN(m.created_at))}</span></span></td>
+    <td class="r"><span class="${valCls} num">${fmtN(m.ingreso)}</span></td>
+    <td class="r"></td><td class="r"></td></tr>`;
+  }).join('');
+  const ajpNota=totAjp?` · Cortesía ${fmtL(totAjp)}`:'';
   return `<div class="acct">
-    <div class="acct-head" style="cursor:default"><span class="a-icon">💰</span><span class="a-name">Comisión devengada <span style="color:var(--txt-mute);font-weight:400">(no bancario)</span></span><span class="a-bal num mv-ing">${fmtL(tot)}</span></div>
-    <div class="acct-open"><span>Envío ${fmtL(totEnvio)} · Producto ${fmtL(totProd)}</span><span class="num mv-ing">${fmtL(tot)}</span></div>
+    <div class="acct-head" style="cursor:default"><span class="a-icon">💰</span><span class="a-name">Comisión devengada <span style="color:var(--txt-mute);font-weight:400">(no bancario)</span></span><span class="a-bal num ${tot<0?'mv-egr':'mv-ing'}">${fmtL(tot)}</span></div>
+    <div class="acct-open"><span>Envío ${fmtL(totEnvio)} · Producto ${fmtL(totProd)}${ajpNota}</span><span class="num ${tot<0?'mv-egr':'mv-ing'}">${fmtL(tot)}</span></div>
     <table class="mov-table"><tbody>${rows}</tbody></table></div>`;
 }
 
