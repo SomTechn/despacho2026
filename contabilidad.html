@@ -185,6 +185,33 @@ body{font-family:'IBM Plex Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',Rob
 .cuenta-tile.neg .ct-saldo{color:var(--red)}
 .cuentas-total{display:flex;justify-content:space-between;align-items:center;margin-top:16px;padding:14px 18px;background:var(--black,#1a1d24);color:#fff;border-radius:10px;font-weight:800;font-size:16px}
 .cuentas-total .num{font-size:20px}
+
+/* CATÁLOGO DE CUENTAS */
+.cat-wrap{padding:16px 26px 44px;max-width:1100px;margin:0 auto}
+.cat-top{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:18px;flex-wrap:wrap}
+.cat-title{font-family:'IBM Plex Sans';font-size:22px;font-weight:700;color:var(--txt)}
+.cat-sub{font-size:13px;color:var(--txt-dim);margin-top:3px;max-width:560px}
+.cat-group{margin-bottom:22px}
+.cat-group-head{padding:8px 14px;background:var(--panel);border-radius:8px;margin-bottom:12px}
+.cat-nat{font-size:14px;font-weight:700;text-transform:uppercase;letter-spacing:.4px}
+.cat-nat-desc{font-size:12.5px;color:var(--txt-dim);margin-left:10px}
+.cat-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px}
+.cat-card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px;box-shadow:var(--shadow);transition:box-shadow .15s}
+.cat-card:hover{box-shadow:var(--shadow-lg)}
+.cat-card.inactivo{opacity:.55}
+.cat-card-head{display:flex;align-items:center;gap:9px;margin-bottom:8px}
+.cat-sigla{font-family:'IBM Plex Mono';font-weight:700;font-size:12px;color:#fff;padding:3px 9px;border-radius:6px;letter-spacing:.5px}
+.cat-nombre{font-weight:600;font-size:14.5px;color:var(--txt);flex:1}
+.cat-lock{font-size:11px}
+.cat-badge-off{font-size:10px;font-weight:700;text-transform:uppercase;color:var(--txt-mute);background:var(--panel-3);padding:2px 7px;border-radius:5px}
+.cat-edit-btn{background:none;border:none;cursor:pointer;font-size:15px;opacity:.5;transition:opacity .15s;padding:2px 4px}
+.cat-edit-btn:hover{opacity:1}
+.cat-desc{font-size:13px;color:var(--txt-dim);line-height:1.5}
+.cat-desc-empty{font-style:italic;color:var(--txt-mute)}
+.cat-ejemplo{margin-top:9px;font-size:12.5px;color:var(--txt-dim);background:var(--panel-2);border-radius:8px;padding:8px 10px;line-height:1.5}
+.cat-ej-lbl{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--orange-3);display:block;margin-bottom:2px}
+@media(max-width:640px){.cat-wrap{padding:12px 14px 44px}.cat-cards{grid-template-columns:1fr}}
+
 .modal-bg{position:fixed;inset:0;z-index:80;background:rgba(20,26,38,.4);backdrop-filter:blur(3px);display:none;align-items:flex-start;justify-content:center;padding:40px 16px;overflow-y:auto}
 .modal-bg.open{display:flex;animation:fadeIn .2s}
 @keyframes fadeIn{from{opacity:0}to{opacity:1}}
@@ -279,6 +306,7 @@ body.vista-balance .kpi-strip{display:none}
 <div class="tabs">
   <button class="tab active" data-tab="movimientos">Movimientos</button>
   <button class="tab" data-tab="balance">Balance y rendimiento</button>
+  <button class="tab" data-tab="catalogo">Catálogo de cuentas</button>
   <div class="tabs-spacer"></div>
   <div class="date-jump" id="dateJumpWrap">
     <label for="dateJump">Ir a fecha</label>
@@ -294,6 +322,9 @@ body.vista-balance .kpi-strip{display:none}
 </div>
 <div id="vistaBalance" style="display:none">
   <div id="balancesModulo"></div>
+</div>
+<div id="vistaCatalogo" style="display:none">
+  <div id="catalogoModulo"></div>
 </div>
 
 <!-- MODAL MOVIMIENTO -->
@@ -324,6 +355,13 @@ body.vista-balance .kpi-strip{display:none}
   <div class="modal-foot" id="detFoot"></div>
 </div></div>
 
+<!-- MODAL CATÁLOGO EDITOR -->
+<div class="modal-bg" id="catEditorModal"><div class="modal">
+  <div class="modal-head"><h3 id="catEditorTitle">Nueva sigla</h3><button class="modal-x" onclick="cerrarModal('catEditorModal')">✕</button></div>
+  <div class="modal-body" id="catEditorBody"></div>
+  <div class="modal-foot" id="catEditorFoot"></div>
+</div></div>
+
 <!-- MODAL CIERRE -->
 <div class="modal-bg" id="cierreModal"><div class="modal">
   <div class="modal-head"><h3>Cierre diario</h3><button class="modal-x" onclick="cerrarModal('cierreModal')">✕</button></div>
@@ -342,7 +380,7 @@ const SUPA_URL='https://jjrmzouigcmeztkybrvp.supabase.co';
 const SUPA_ANON='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Impqcm16b3VpZ2NtZXp0a3licnZwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI5MzExNDgsImV4cCI6MjA4ODUwNzE0OH0.tNUHxGWMWh7Q6v4mH3y5gOxpczpEJHwNqwH2TehL61I';
 const sb=supabase.createClient(SUPA_URL,SUPA_ANON,{realtime:{params:{eventsPerSecond:10}}});
 
-const S={cuentas:[],tipos:[],movimientos:[],saldosDia:{},desde:null,hasta:null,colapsadas:{},mostrarEliminados:false,busqueda:'',filtroTipo:'',modo:'mes',tab:'movimientos'};
+const S={cuentas:[],tipos:[],tiposCatalogo:[],movimientos:[],saldosDia:{},desde:null,hasta:null,colapsadas:{},mostrarEliminados:false,busqueda:'',filtroTipo:'',modo:'mes',tab:'movimientos'};
 const HN_TZ='America/Tegucigalpa';
 const fmtL=n=>'L. '+(Number(n)||0).toLocaleString('es-HN',{minimumFractionDigits:2,maximumFractionDigits:2});
 const fmtN=n=>(Number(n)||0).toLocaleString('es-HN',{minimumFractionDigits:2,maximumFractionDigits:2});
@@ -383,8 +421,10 @@ async function firmarComprobante(ruta){
 async function cargarCatalogos(){
   const[{data:ctas},{data:tps}]=await Promise.all([
     sb.from('cuentas_financieras').select('*').eq('activa',true).order('orden'),
-    sb.from('tipos_documento_contable').select('*').eq('activo',true).order('orden')]);
-  S.cuentas=ctas||[];S.tipos=tps||[];
+    sb.from('tipos_documento_contable').select('*').order('naturaleza').order('orden')]);
+  S.cuentas=ctas||[];
+  S.tiposCatalogo=tps||[];              // todos (para el catálogo editable)
+  S.tipos=(tps||[]).filter(t=>t.activo); // solo activos (para selectores de movimiento)
 }
 async function cargarMovimientos(){
   const{data,error}=await sb.from('vw_movimientos_contables').select('*').gte('fecha',S.desde).lte('fecha',S.hasta).order('created_at',{ascending:true});
@@ -1081,9 +1121,11 @@ function wireEvents(){
     t.classList.add('active');S.tab=t.dataset.tab;
     const esMov=S.tab==='movimientos';
     document.getElementById('vistaMovimientos').style.display=esMov?'':'none';
-    document.getElementById('vistaBalance').style.display=esMov?'none':'';
+    document.getElementById('vistaBalance').style.display=S.tab==='balance'?'':'none';
+    document.getElementById('vistaCatalogo').style.display=S.tab==='catalogo'?'':'none';
     document.body.classList.toggle('vista-balance',!esMov);
     const dj=document.getElementById('dateJumpWrap');if(dj)dj.style.display=esMov?'':'none';
+    if(S.tab==='catalogo')renderCatalogo();
   }));
   // Selector "Ir a fecha": salta a la columna del día
   const djInput=document.getElementById('dateJump');
@@ -1111,6 +1153,128 @@ function wireEvents(){
   document.querySelectorAll('.modal-bg').forEach(bg=>bg.addEventListener('click',e=>{if(e.target===bg)bg.classList.remove('open');}));
   document.addEventListener('keydown',e=>{if(e.key==='Escape')document.querySelectorAll('.modal-bg.open').forEach(m=>m.classList.remove('open'));});
 }
+// ══════════════ CATÁLOGO DE CUENTAS (editable) ══════════════
+const NAT_META={
+  INGRESO:{label:'Ingresos',desc:'Aumentan el patrimonio: dinero real que gana Somar.',color:'var(--green)',bg:'var(--green-bg)'},
+  EGRESO:{label:'Egresos',desc:'Gastos reales que salen de caja.',color:'var(--red)',bg:'var(--red-bg)'},
+  PASAMANOS:{label:'Pasamanos (cuenta de terceros)',desc:'Dinero que pasa por las cuentas de Somar pero no es propio: mueve saldo bancario sin afectar la utilidad.',color:'#7c3aed',bg:'#f3e8ff'},
+  AJUSTE:{label:'Ajustes',desc:'Correcciones contables que no son dinero real (ej. saldo de cortesía).',color:'#a855f7',bg:'#f5edff'},
+  TRASLADO:{label:'Traslados',desc:'Movimiento de dinero entre cuentas propias de Somar.',color:'#6366f1',bg:'#eef0ff'}
+};
+const NAT_ORDER=['INGRESO','EGRESO','PASAMANOS','AJUSTE','TRASLADO'];
+
+function renderCatalogo(){
+  const cont=document.getElementById('catalogoModulo');
+  const tipos=S.tiposCatalogo||[];
+  const grupos={};
+  for(const t of tipos){(grupos[t.naturaleza]=grupos[t.naturaleza]||[]).push(t);}
+  let html=`<div class="cat-wrap">
+    <div class="cat-top">
+      <div>
+        <h2 class="cat-title">Catálogo de cuentas contables</h2>
+        <p class="cat-sub">Cada sigla clasifica un tipo de movimiento. Las marcadas 🔒 las genera el sistema automáticamente.</p>
+      </div>
+      <button class="btn btn-primary" onclick="abrirCatEditor()">+ Nueva sigla</button>
+    </div>`;
+  for(const nat of NAT_ORDER){
+    const arr=grupos[nat];if(!arr||!arr.length)continue;
+    const meta=NAT_META[nat];
+    html+=`<div class="cat-group">
+      <div class="cat-group-head" style="border-left:4px solid ${meta.color}">
+        <div><span class="cat-nat" style="color:${meta.color}">${meta.label}</span>
+        <span class="cat-nat-desc">${esc(meta.desc)}</span></div>
+      </div>
+      <div class="cat-cards">`;
+    for(const t of arr){
+      html+=`<div class="cat-card ${t.activo?'':'inactivo'}">
+        <div class="cat-card-head">
+          <span class="cat-sigla" style="background:${esc(t.color||meta.color)}">${esc(t.sigla)}</span>
+          <span class="cat-nombre">${esc(t.nombre)}${t.es_nucleo?' <span class="cat-lock" title="Generada por el sistema">🔒</span>':''}</span>
+          ${!t.activo?'<span class="cat-badge-off">Inactiva</span>':''}
+          <button class="cat-edit-btn" onclick="abrirCatEditor(${t.id})" title="Editar">✏️</button>
+        </div>
+        ${t.descripcion?`<div class="cat-desc">${esc(t.descripcion)}</div>`:'<div class="cat-desc cat-desc-empty">Sin descripción</div>'}
+        ${t.ejemplo_uso?`<div class="cat-ejemplo"><span class="cat-ej-lbl">Ejemplo</span> ${esc(t.ejemplo_uso)}</div>`:''}
+      </div>`;
+    }
+    html+=`</div></div>`;
+  }
+  html+=`</div>`;
+  cont.innerHTML=html;
+  requestAnimationFrame(ajustarOffsetSticky);
+}
+
+function abrirCatEditor(id){
+  const t=id?(S.tiposCatalogo||[]).find(x=>x.id===id):null;
+  const esNucleo=t?.es_nucleo;
+  const natOpts=NAT_ORDER.map(n=>`<option value="${n}" ${t&&t.naturaleza===n?'selected':''}>${NAT_META[n].label}</option>`).join('');
+  const body=`
+    <div class="grid2">
+      <div class="field"><label>Sigla *</label>
+        <input type="text" id="catSigla" class="inp" maxlength="6" value="${t?esc(t.sigla):''}" ${t?'disabled':''} placeholder="Ej. PUB" style="text-transform:uppercase">
+        ${t?'<span style="font-size:11px;color:var(--txt-mute)">La sigla no se puede cambiar</span>':''}
+      </div>
+      <div class="field"><label>Naturaleza *</label>
+        <select id="catNat" class="inp" ${esNucleo?'disabled':''}>${natOpts}</select>
+        ${esNucleo?'<span style="font-size:11px;color:var(--txt-mute)">Protegida en siglas del sistema</span>':''}
+      </div>
+    </div>
+    <div class="field"><label>Nombre *</label><input type="text" id="catNombre" class="inp" value="${t?esc(t.nombre):''}" placeholder="Nombre descriptivo"></div>
+    <div class="field"><label>Descripción</label><textarea id="catDesc" class="inp" rows="2" placeholder="¿Qué representa esta cuenta?">${t?esc(t.descripcion||''):''}</textarea></div>
+    <div class="field"><label>Ejemplo de uso</label><textarea id="catEjemplo" class="inp" rows="2" placeholder="Un caso concreto…">${t?esc(t.ejemplo_uso||''):''}</textarea></div>
+    <div class="grid2">
+      <div class="field"><label>Color</label><input type="color" id="catColor" class="inp" value="${t?esc(t.color||'#FF8C00'):'#FF8C00'}" style="height:42px;padding:4px"></div>
+      <div class="field"><label>Estado</label>
+        <select id="catActivo" class="inp"><option value="true" ${!t||t.activo?'selected':''}>Activa</option><option value="false" ${t&&!t.activo?'selected':''}>Inactiva</option></select>
+      </div>
+    </div>`;
+  document.getElementById('catEditorTitle').textContent=t?`Editar sigla · ${t.sigla}`:'Nueva sigla contable';
+  document.getElementById('catEditorBody').innerHTML=body;
+  let footHtml='';
+  if(t&&!t.es_nucleo)footHtml+=`<button class="btn btn-danger left" onclick="eliminarTipoDoc(${t.id})">🗑 Eliminar</button>`;
+  footHtml+=`<button class="btn btn-ghost" onclick="cerrarModal('catEditorModal')">Cancelar</button>
+    <button class="btn btn-primary" onclick="guardarTipoDoc(${t?t.id:'null'})">Guardar</button>`;
+  document.getElementById('catEditorFoot').innerHTML=footHtml;
+  abrirModal('catEditorModal');
+}
+
+async function guardarTipoDoc(id){
+  const nombre=document.getElementById('catNombre').value.trim();
+  const naturaleza=document.getElementById('catNat').value;
+  const descripcion=document.getElementById('catDesc').value.trim();
+  const ejemplo=document.getElementById('catEjemplo').value.trim();
+  const color=document.getElementById('catColor').value;
+  const activo=document.getElementById('catActivo').value==='true';
+  if(!nombre){toast('El nombre es obligatorio','err');return;}
+  try{
+    let res;
+    if(id){
+      res=await sb.rpc('fn_editar_tipo_documento',{p_id:id,p_nombre:nombre,p_naturaleza:naturaleza,
+        p_descripcion:descripcion,p_ejemplo:ejemplo,p_color:color,p_activo:activo});
+    }else{
+      const sigla=document.getElementById('catSigla').value.trim().toUpperCase();
+      if(!sigla){toast('La sigla es obligatoria','err');return;}
+      res=await sb.rpc('fn_crear_tipo_documento',{p_sigla:sigla,p_nombre:nombre,p_naturaleza:naturaleza,
+        p_descripcion:descripcion,p_ejemplo:ejemplo,p_color:color});
+    }
+    if(res.error)throw res.error;
+    toast(id?'Sigla actualizada':'Sigla creada','ok');
+    cerrarModal('catEditorModal');
+    await cargarCatalogos();renderCatalogo();
+  }catch(e){console.error(e);toast('Error: '+(e.message||'no se pudo guardar'),'err');}
+}
+
+async function eliminarTipoDoc(id){
+  if(!confirm('¿Eliminar esta sigla? Si tiene movimientos, se desactivará en vez de borrarse.'))return;
+  try{
+    const{data,error}=await sb.rpc('fn_eliminar_tipo_documento',{p_id:id});
+    if(error)throw error;
+    toast(data?.desactivado?'Sigla desactivada (tiene historial)':'Sigla eliminada','ok');
+    cerrarModal('catEditorModal');
+    await cargarCatalogos();renderCatalogo();
+  }catch(e){console.error(e);toast('Error: '+(e.message||'no se pudo eliminar'),'err');}
+}
+
 function suscribirRealtime(){
   const recargar=async()=>{await cargarCatalogos();await cargarMovimientos();render();};
   sb.channel('contab')
@@ -1119,6 +1283,7 @@ function suscribirRealtime(){
     .on('postgres_changes',{event:'*',schema:'public',table:'ingresos_extras'},recargar)
     .on('postgres_changes',{event:'*',schema:'public',table:'ingresos_operativos'},recargar)
     .on('postgres_changes',{event:'*',schema:'public',table:'ajustes_promocionales'},recargar)
+    .on('postgres_changes',{event:'*',schema:'public',table:'tipos_documento_contable'},async()=>{await cargarCatalogos();if(S.tab==='catalogo')renderCatalogo();else render();})
     .subscribe();
 }
 window.addEventListener('resize',()=>{clearTimeout(window._offT);window._offT=setTimeout(ajustarOffsetSticky,150);});
