@@ -2407,8 +2407,11 @@ async function buscarPedidosAvanzado() {
 
   let q = sb.from('pedidos').select('*').eq('eliminado', false).order('created_at', { ascending: false }).limit(500);
 
-  if(desde)    q = q.gte('created_at', desde + 'T00:00:00');
-  if(hasta)    q = q.lte('created_at', hasta + 'T23:59:59');
+  // created_at se guarda en UTC. Honduras es UTC-6, así que un pedido creado
+  // a las 6:00 p.m. HN cae en el día siguiente UTC y desaparecía del filtro.
+  // Convertimos el rango HN -> UTC antes de comparar.
+  if(desde)    q = q.gte('created_at', rangoUTCdesdeHN(desde, desde).desde);
+  if(hasta)    q = q.lte('created_at', rangoUTCdesdeHN(hasta, hasta).hasta);
   if(cliente)  q = q.or(`nombre_cliente.ilike.%${cliente}%,celular_cliente.ilike.%${cliente}%,nombre_destinatario.ilike.%${cliente}%`);
   if(comercio) q = q.ilike('nombre_comercio', `%${comercio}%`);
 
@@ -6599,43 +6602,74 @@ async function cancelarReserva(id) {
 // ════════════════════════════════════════════════════════════
 // LIQUIDACIONES A RIDERS
 // ════════════════════════════════════════════════════════════
+// ── Cuentas financieras: cache + selector reutilizable ──────────────
+// BAC Personal (id=2) es la cuenta operativa por defecto.
+const CUENTA_DEFAULT = 2;
+let _cuentasCache = null;
+async function getCuentas(){
+  if(_cuentasCache) return _cuentasCache;
+  const {data} = await sb.from('cuentas_financieras')
+    .select('id,nombre,icono').eq('activa',true).order('orden');
+  _cuentasCache = data || [];
+  return _cuentasCache;
+}
+function selectCuentaHTML(id, sel){
+  const cuentas = _cuentasCache || [];
+  const elegida = sel || CUENTA_DEFAULT;
+  return `<select id="${id}" class="inp" style="font-size:12px;padding:6px 10px">
+    ${cuentas.map(c=>`<option value="${c.id}"${c.id===elegida?' selected':''}>${c.icono||'🏦'} ${c.nombre}</option>`).join('')}
+  </select>`;
+}
+
 async function cargarLiquidaciones(estatus='PENDIENTE') {
   const el=document.getElementById('liq-lista');
   if(!el) return;
   el.innerHTML='<div class="empty">Cargando...</div>';
-  const {data,error}=await sb.from('liquidaciones_delivery')
-    .select('*,delivery(nombre,celular,cuenta_bancaria,banco)')
-    .eq('eliminado',false)
-    .eq('estatus',estatus).order('creado_at',{ascending:false});
+  await getCuentas();
+  // v_liquidaciones_detalle expone no_orden, rider y cuenta origen ya resueltos
+  const {data,error}=await sb.from('v_liquidaciones_detalle')
+    .select('*').eq('estatus',estatus).order('creado_at',{ascending:false});
   if(error){el.innerHTML='<div class="empty">Error: '+error.message+'</div>';return;}
   if(!data?.length){el.innerHTML='<div class="empty">Sin liquidaciones '+estatus.toLowerCase()+'s</div>';return;}
   const b=document.getElementById('badge-liq');
   if(estatus==='PENDIENTE'&&b){b.textContent=data.length;b.style.display=data.length>0?'inline':'none';}
   el.innerHTML=data.map(l=>{
-    const rider=l.delivery;
-    const nombre=rider?.nombre||rider?.[0]?.nombre||'—';
-    const banco=rider?.banco||rider?.[0]?.banco||'';
-    const cuenta=rider?.cuenta_bancaria||rider?.[0]?.cuenta_bancaria||'';
+    const nombre=l.rider||'—';
+    const orden=l.no_orden||'—';
     return `<div class="dep-card">
       <div class="dep-hdr">
         <div class="ch-av" style="border:2px solid var(--az)">${inic(nombre)}</div>
         <div style="flex:1">
           <div style="font-size:14px;font-weight:700">${nombre}</div>
-          ${banco?`<div style="font-size:11px;color:var(--td)">${banco} · ${cuenta}</div>`:''}
+          <div style="font-size:11px;color:var(--nar);font-family:'Space Mono',monospace">${orden}${l.nombre_cliente?` · ${l.nombre_cliente}`:''}</div>
           <div style="font-size:11px;color:var(--td)">${fmtFecha(l.creado_at)}</div>
         </div>
-        <div style="font-size:20px;font-weight:900;color:var(--az)">L. ${parseFloat(l.monto_liquidar).toFixed(2)}</div>
+        <div style="text-align:right">
+          <div style="font-size:20px;font-weight:900;color:var(--az)">L. ${parseFloat(l.monto_liquidar).toFixed(2)}</div>
+          <div style="font-size:10px;color:var(--td)">${l.metodo_pago||''}</div>
+        </div>
       </div>
       ${estatus==='PENDIENTE'?`
         <div class="dep-footer" style="flex-direction:column;gap:8px;align-items:stretch">
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="font-size:11px;color:var(--td);white-space:nowrap">Pagar desde:</span>
+            ${selectCuentaHTML('liq-cta-'+l.id)}
+          </div>
           <label style="flex:1;display:flex;align-items:center;gap:6px;background:var(--g3);border:1px dashed var(--g5);border-radius:8px;padding:8px 12px;cursor:pointer;font-size:12px;color:var(--td)">
             📎 <span id="comp-lbl-${l.id}">Seleccionar comprobante...</span>
             <input type="file" accept="image/*" id="comp-file-${l.id}" style="display:none" onchange="(function(e,id){const f=e.target.files[0];if(!f)return;document.getElementById('comp-lbl-'+id).textContent=f.name;})(event,'${l.id}')">
           </label>
           <button class="btn btn-success btn-sm" onclick="liquidar('${l.id}')">✓ Liquidar</button>
-        </div>`:`<div style="padding-top:8px;border-top:1px solid var(--g3);margin-top:4px;font-size:12px;color:var(--verde)">✅ Liquidado ${l.liquidado_at?fmtFecha(l.liquidado_at):''}</div>`}
+        </div>`:`
+        ${l.comprobante_url?`<img data-sbpath="${l.comprobante_url}" data-sbbucket="pagos-docs" style="width:100%;max-height:180px;object-fit:contain;border-radius:10px;cursor:pointer;background:#111;margin-top:8px">`:''}
+        <div style="padding-top:8px;border-top:1px solid var(--g3);margin-top:4px;font-size:12px;color:var(--verde)">
+          ✅ Liquidado ${l.liquidado_at?fmtFecha(l.liquidado_at):''}${l.liquidado_por?` por ${l.liquidado_por}`:''}
+          ${l.cuenta_origen_nombre?` · desde ${l.cuenta_origen_nombre}`:''}
+        </div>`}
     </div>`;
   }).join('');
+  // Firmar comprobantes privados (pestaña Liquidadas)
+  firmarImgs(el);
 }
 async function liquidar(liqId) {
   const fileEl=document.getElementById('comp-file-'+liqId);
@@ -6645,8 +6679,14 @@ async function liquidar(liqId) {
   try {
     comp_url = await sbUpload('pagos-docs', file, 'liquidaciones');
   } catch(e){toast('Error subiendo imagen: '+e.message,'danger');return;}
-  const {error}=await sb.rpc('liquidar_pedido',{p_liq_id:liqId,p_comprobante:comp_url,p_notas:'',p_liquidado_por:document.getElementById('u-name')?.textContent||'Despacho'});
+  const cta=parseInt(document.getElementById('liq-cta-'+liqId)?.value)||CUENTA_DEFAULT;
+  const {data:res,error}=await sb.rpc('liquidar_pedido',{
+    p_liq_id:liqId, p_comprobante:comp_url, p_notas:'',
+    p_liquidado_por:document.getElementById('u-name')?.textContent||'Despacho',
+    p_cuenta_id:cta
+  });
   if(error){toast('Error: '+error.message,'danger');return;}
+  if(res && res.success===false){toast('Error: '+(res.msg||'No se pudo liquidar'),'danger');return;}
   toast('✅ Liquidación registrada'); cargarLiquidaciones('PENDIENTE');
 }
 function filtLiq(btn,estatus) {
@@ -6663,8 +6703,12 @@ async function cargarComprobantes(estatus='PENDIENTE') {
   el.innerHTML='<div class="empty">Cargando...</div>';
   let q=sb.from('pedidos').select('id,no_orden,nombre_cliente,nombre_comercio,subtotal,tarifa_envio,monto_cobrar,metodo_pago,imagen_transferencia,transferencia_validada_por,delivery_id,estatus,created_at,cliente_id,transferencia_id,transferencias_cliente(id,monto_total,imagen_url,referencia_banco,comentario,validada_por)')
     .eq('eliminado',false).in('metodo_pago',['TRANSFERENCIA','TARJETA']).eq('estatus','FINALIZADO').order('created_at',{ascending:false}).limit(50);
+  // 'RECHAZADO_*' tambien es NOT NULL: sin excluirlo, un rechazado aparecia
+  // tanto en Aprobados como en Rechazados.
   if(estatus==='PENDIENTE') q=q.is('transferencia_validada_por',null);
-  else if(estatus==='APROBADO') q=q.not('transferencia_validada_por','is',null);
+  else if(estatus==='APROBADO') q=q.not('transferencia_validada_por','is',null).not('transferencia_validada_por','like','RECHAZADO_%');
+  else if(estatus==='RECHAZADO') q=q.like('transferencia_validada_por','RECHAZADO_%');
+  await getCuentas();
   const {data,error}=await q;
   if(error){el.innerHTML='<div class="empty">Error: '+error.message+'</div>';return;}
   const badge=document.getElementById('badge-comp');
@@ -6715,6 +6759,10 @@ async function cargarComprobantes(estatus='PENDIENTE') {
           <button class="btn btn-sm" style="flex:1;justify-content:center;background:var(--g3);color:var(--td)" onclick="abrirAgrupar('${t.id}')">✏️ Editar</button>
           <button class="btn btn-sm" style="flex:1;justify-content:center;background:var(--g3);color:var(--td)" onclick="desagruparTransf('${t.id}')">🔓 Desagrupar</button>
         </div>
+        ${!aprob?`<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+          <span style="font-size:11px;color:var(--td);white-space:nowrap">Depositado en:</span>
+          ${selectCuentaHTML('tg-cta-'+t.id)}
+        </div>`:''}
         ${aprob?
           `<div style="background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.3);border-radius:8px;padding:8px 12px;font-size:12px;color:#22C55E">✅ Validado por ${t.validada_por}</div>`:
           `<div style="display:flex;gap:8px">
@@ -6747,7 +6795,11 @@ async function cargarComprobantes(estatus='PENDIENTE') {
         ${!aprobado?`<button class="btn btn-sm" style="width:100%;justify-content:center;background:var(--g3);color:var(--or);border:1px solid var(--or);margin-bottom:8px" onclick="abrirAgrupar(null,'${p.id}')">🔗 Agrupar con otros pedidos</button>`:''}
         ${aprobado?
           `<div style="background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.3);border-radius:8px;padding:8px 12px;font-size:12px;color:#22C55E">✅ Validado por ${p.transferencia_validada_por}</div>`:
-          `<div style="display:flex;gap:8px">
+          `<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+            <span style="font-size:11px;color:var(--td);white-space:nowrap">Depositado en:</span>
+            ${selectCuentaHTML('tp-cta-'+p.id)}
+          </div>
+          <div style="display:flex;gap:8px">
             <button class="btn btn-success" style="flex:1;justify-content:center" onclick="validarTransferencia('${p.id}',true)">✅ Aprobar</button>
             <button class="btn btn-danger" style="flex:1;justify-content:center" onclick="validarTransferencia('${p.id}',false)">❌ Rechazar</button>
           </div>`}
@@ -6870,24 +6922,27 @@ async function desagruparTransf(tid){
 
 async function validarGrupo(tid,aprobado){
   const agente=document.getElementById('u-name')?.textContent||'Despacho';
-  const val = aprobado?agente:'RECHAZADO_'+agente;
-  const {error:e1}=await sb.from('transferencias_cliente').update({
-    validada_por:val, validada_at:new Date().toISOString()}).eq('id',tid);
-  if(e1){ toast('Error: '+e1.message,'danger'); return; }
-  const {error:e2}=await sb.from('pedidos').update({
-    transferencia_validada_por:val, mt_aprobacion_trans:new Date().toISOString()
-  }).eq('transferencia_id',tid);
-  if(e2){ toast('Error: '+e2.message,'danger'); return; }
+  // La RPC propaga la validacion a los pedidos del grupo, lo que dispara
+  // on_pedido_transferencia_caja y registra el ingreso en movimientos_caja.
+  const cta=aprobado?(parseInt(document.getElementById('tg-cta-'+tid)?.value)||CUENTA_DEFAULT):null;
+  const {error}=await sb.rpc('validar_transferencia_grupo',{
+    p_transf_id:tid, p_aprobar:aprobado, p_cuenta_id:cta, p_agente:agente, p_comentario:null
+  });
+  if(error){ toast('Error: '+error.message,'danger'); return; }
   toast(aprobado?'✅ Transferencia aprobada':'❌ Rechazada');
   cargarComprobantes('PENDIENTE');
 }
 
 async function validarTransferencia(pedidoId,aprobado) {
   const agente=document.getElementById('u-name')?.textContent||'Despacho';
-  const {error}=await sb.from('pedidos').update({
+  // cuenta_deposito_id debe ir en el MISMO update que el validador para que
+  // on_pedido_transferencia_caja lo lea y registre el ingreso.
+  const upd={
     transferencia_validada_por:aprobado?agente:'RECHAZADO_'+agente,
     mt_aprobacion_trans:new Date().toISOString()
-  }).eq('id',pedidoId);
+  };
+  if(aprobado) upd.cuenta_deposito_id=parseInt(document.getElementById('tp-cta-'+pedidoId)?.value)||CUENTA_DEFAULT;
+  const {error}=await sb.from('pedidos').update(upd).eq('id',pedidoId);
   if(error){toast('Error: '+error.message,'danger');return;}
   toast(aprobado?'✅ Transferencia aprobada':'❌ Rechazada');
   cargarComprobantes('PENDIENTE');
