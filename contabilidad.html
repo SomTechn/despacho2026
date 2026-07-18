@@ -357,6 +357,29 @@ function fechaCorta(iso){if(!iso)return'';const[y,m,d]=iso.split('-');return`${d
 function tipoPorSigla(sg){return S.tipos.find(t=>t.sigla===sg)||{sigla:sg,nombre:sg,color:'#71717a'};}
 function cuentaPorId(id){return S.cuentas.find(c=>c.id===id);}
 
+// Resuelve el bucket correcto según la ruta del archivo y devuelve una URL firmada.
+// Comprobantes de transferencias de cliente y liquidaciones viven en 'pagos-docs';
+// bonos y depósitos en 'delivery-docs'. Si ya es una URL http(s), la devuelve tal cual.
+function bucketDeRuta(ruta){
+  if(!ruta) return null;
+  if(/^transferencias\//.test(ruta) || /^liquidaciones\//.test(ruta) || /^pagos\//.test(ruta)) return 'pagos-docs';
+  if(/^chat\//.test(ruta)) return 'chat-docs';
+  return 'delivery-docs';
+}
+async function firmarComprobante(ruta){
+  if(!ruta) return null;
+  if(/^https?:\/\//.test(ruta)) return ruta; // ya es URL absoluta
+  // Si viene con URL de bucket embebida, extraer bucket/path
+  let bucket=bucketDeRuta(ruta), path=ruta;
+  const mm=ruta.match(/\/object\/(?:sign|public)\/([^/]+)\/(.+?)(?:\?|$)/);
+  if(mm){bucket=mm[1];path=decodeURIComponent(mm[2]);}
+  try{
+    const{data,error}=await sb.storage.from(bucket).createSignedUrl(path,3600);
+    if(error||!data)return null;
+    return data.signedUrl;
+  }catch(e){return null;}
+}
+
 async function cargarCatalogos(){
   const[{data:ctas},{data:tps}]=await Promise.all([
     sb.from('cuentas_financieras').select('*').eq('activa',true).order('orden'),
@@ -669,7 +692,7 @@ function renderBloqueDevengo(movs){
 
 // ── DETALLE / EDICIÓN ──
 const FUENTE_MANUAL=['ingreso_extra','egreso'];
-let _detFotoFile=null, _detMov=null;
+let _detFotoFile=null, _detMov=null, _detTraslado=null;
 
 async function abrirDetalleMov(movId){
   const m=S.movimientos.find(x=>String(x.mov_id)===String(movId));
@@ -680,10 +703,12 @@ async function abrirDetalleMov(movId){
   const esManual=FUENTE_MANUAL.includes(m.fuente)&&!m.es_automatico&&!m.anulado;
   let fotoUrl=null;
   if(m.foto_comprobante_url){
-    try{const{data}=await sb.storage.from('delivery-docs').createSignedUrl(m.foto_comprobante_url,3600);fotoUrl=data?.signedUrl;}catch(e){}
+    fotoUrl=await firmarComprobante(m.foto_comprobante_url);
   }
 
-  if(esManual){ renderDetalleEditable(m,tipo,cta,fotoUrl); }
+  const esTraslado=(m.fuente==='traslado_out'||m.fuente==='traslado_in');
+  if(esTraslado && !m.anulado){ renderDetalleTraslado(m,fotoUrl); }
+  else if(esManual){ renderDetalleEditable(m,tipo,cta,fotoUrl); }
   else { renderDetalleLectura(m,tipo,cta,fotoUrl); }
   abrirModal('detModal');
 }
@@ -773,6 +798,90 @@ async function guardarEdicion(m){
     });
     if(error)throw error;
     toast('Cambios guardados','ok');cerrarModal('detModal');
+    await cargarCatalogos();await cargarMovimientos();render();
+  }catch(e){console.error(e);toast('Error: '+(e.message||'no se pudo guardar'),'err');}
+  finally{btn.disabled=false;btn.textContent='Guardar cambios';}
+}
+
+async function renderDetalleTraslado(m,fotoUrl){
+  // Cargar el registro base para conocer origen y destino reales
+  const{data:base,error}=await sb.from('movimientos_caja')
+    .select('id,cuenta_origen_id,cuenta_destino_id,monto,concepto,fecha,foto_comprobante_url')
+    .eq('id',m.mov_id).single();
+  if(error||!base){ renderDetalleLectura(m,tipoPorSigla(m.sigla),cuentaPorId(m.cuenta_id),fotoUrl); return; }
+  _detTraslado=base;
+  const ctaOpts=(sel)=>S.cuentas.map(c=>`<option value="${c.id}" ${c.id===sel?'selected':''}>${c.icono||'🏦'} ${esc(c.nombre)}</option>`).join('');
+  const oNom=cuentaPorId(base.cuenta_origen_id)?.nombre||'—';
+  const dNom=cuentaPorId(base.cuenta_destino_id)?.nombre||'—';
+  document.getElementById('detBody').innerHTML=`
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+      <span class="sigla" style="background:#6366f1;min-width:44px;font-size:11px">TFB</span>
+      <span style="font-weight:700">Editar traslado entre cuentas</span>
+      <span style="margin-left:auto;font-size:11px;color:var(--txt-mute)">Reg: ${esc(fechaHoraHN(m.created_at))}</span>
+    </div>
+    <div style="background:var(--panel-2);border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:13px;color:var(--txt-dim)">
+      Actual: <b style="color:var(--txt)">${esc(oNom)}</b> → <b style="color:var(--txt)">${esc(dNom)}</b> · <span class="num">${fmtL(base.monto)}</span>
+    </div>
+    <div class="grid2">
+      <div class="field"><label>Cuenta origen (sale)</label><select id="trOrigen" class="inp">${ctaOpts(base.cuenta_origen_id)}</select></div>
+      <div class="field"><label>Cuenta destino (entra)</label><select id="trDestino" class="inp">${ctaOpts(base.cuenta_destino_id)}</select></div>
+    </div>
+    <div class="grid2">
+      <div class="field"><label>Fecha</label><input type="date" id="trFecha" class="inp" value="${esc(base.fecha)}"></div>
+      <div class="field"><label>Monto (L.)</label><input type="number" id="trMonto" class="inp num" step="0.01" min="0" value="${base.monto}"></div>
+    </div>
+    <div class="field"><label>Concepto</label><textarea id="trConcepto" class="inp" rows="2">${esc(base.concepto||'')}</textarea></div>
+    <div class="field"><label>Comprobante</label>
+      <div class="file-drop" id="trFileDrop"><input type="file" id="trFoto" accept="image/*" hidden><span id="trFileLabel">${base.foto_comprobante_url?'📎 Reemplazar imagen':'📎 Agregar imagen'}</span></div>
+      ${fotoUrl?`<img id="trPreview" src="${fotoUrl}" class="foto-preview">`:`<img id="trPreview" class="foto-preview" style="display:none">`}
+    </div>
+    <p style="font-size:11.5px;color:var(--txt-mute)">💡 Al guardar o eliminar se ajustan automáticamente los saldos de ambas cuentas.</p>`;
+  document.getElementById('detFoot').innerHTML=`
+    <button class="btn btn-danger left" id="btnEliminarTr">🗑 Eliminar</button>
+    <button class="btn btn-ghost" onclick="cerrarModal('detModal')">Cancelar</button>
+    <button class="btn btn-primary" id="btnGuardarTr">Guardar cambios</button>`;
+  _detFotoFile=null;
+  const fd=document.getElementById('trFileDrop'),ff=document.getElementById('trFoto');
+  fd.addEventListener('click',()=>ff.click());
+  ff.addEventListener('change',e=>{const f=e.target.files[0];if(!f)return;_detFotoFile=f;document.getElementById('trFileLabel').textContent='📎 '+f.name;const pv=document.getElementById('trPreview');pv.src=URL.createObjectURL(f);pv.style.display='block';});
+  document.getElementById('btnEliminarTr').addEventListener('click',()=>eliminarTraslado(base.id));
+  document.getElementById('btnGuardarTr').addEventListener('click',()=>guardarTraslado(base.id));
+}
+
+async function eliminarTraslado(movId){
+  if(!confirm('¿Eliminar este traslado? Se revertirá el saldo de ambas cuentas.'))return;
+  try{
+    const{error}=await sb.rpc('fn_anular_traslado_caja',{p_mov_id:movId,p_motivo:'Eliminado desde contabilidad'});
+    if(error)throw error;
+    toast('Traslado eliminado','ok');cerrarModal('detModal');
+    await cargarCatalogos();await cargarMovimientos();render();
+  }catch(e){console.error(e);toast('Error: '+(e.message||'no se pudo eliminar'),'err');}
+}
+
+async function guardarTraslado(movId){
+  const origen=parseInt(document.getElementById('trOrigen').value);
+  const destino=parseInt(document.getElementById('trDestino').value);
+  const monto=parseFloat(document.getElementById('trMonto').value);
+  const concepto=document.getElementById('trConcepto').value.trim();
+  const fecha=document.getElementById('trFecha').value;
+  if(origen===destino){toast('Origen y destino no pueden ser la misma cuenta','err');return;}
+  if(!monto||monto<=0){toast('Monto inválido','err');return;}
+  if(!fecha){toast('Fecha inválida','err');return;}
+  const btn=document.getElementById('btnGuardarTr');btn.disabled=true;btn.textContent='Guardando…';
+  try{
+    let fotoPath=_detTraslado?.foto_comprobante_url||null;
+    if(_detFotoFile){
+      const ext=(_detFotoFile.name.split('.').pop()||'jpg').toLowerCase();
+      const path=`transferencias/${Date.now()}_${Math.random().toString(36).slice(2,8)}.${ext}`;
+      const{error}=await sb.storage.from('pagos-docs').upload(path,_detFotoFile,{upsert:false});
+      if(error)throw error; fotoPath=path;
+    }
+    const{error}=await sb.rpc('fn_editar_traslado_caja',{
+      p_mov_id:movId,p_cuenta_origen_id:origen,p_cuenta_destino_id:destino,
+      p_monto:monto,p_concepto:concepto||'Traslado',p_fecha:fecha,p_foto_url:fotoPath
+    });
+    if(error)throw error;
+    toast('Traslado actualizado','ok');cerrarModal('detModal');
     await cargarCatalogos();await cargarMovimientos();render();
   }catch(e){console.error(e);toast('Error: '+(e.message||'no se pudo guardar'),'err');}
   finally{btn.disabled=false;btn.textContent='Guardar cambios';}
