@@ -3085,8 +3085,8 @@ async function confirmarAsig() {
   if(!S.selRiderId || !S.selPedidoId) return;
   const btn = document.getElementById('btn-confirm-asig');
   btn.disabled = true; btn.textContent = 'Asignando...';
-  // Insertar en asignaciones_pendientes (el rider acepta o rechaza)
-  const expira = new Date(Date.now() + 30000).toISOString();
+  // Asignación MANUAL: no expira (persiste al rider hasta aceptar o reasignar)
+  const expira = '2099-12-31T23:59:59.000Z';
   // Eliminar asignaciones previas del mismo par pedido+rider (evita unique constraint)
   await sb.from('asignaciones_pendientes')
     .delete()
@@ -3101,6 +3101,7 @@ async function confirmarAsig() {
     pedido_id: S.selPedidoId,
     delivery_id: parseInt(S.selRiderId),
     estatus: 'ENVIADO',
+    metodo: 'MANUAL',
     expira_at: expira,
   });
   btn.textContent = 'Asignar Pedido'; btn.disabled = false;
@@ -5047,23 +5048,8 @@ async function guardarPedido() {
   S.stepVals = { 'sv-prod':0, 'sv-envio':50, 'sv-propina':0 };
   ['sv-prod','sv-envio','sv-propina'].forEach(id=>{const el=document.getElementById(id);if(el)el.textContent=id==='sv-envio'?'50.00':'0.00';});
   wizGo(0);
-  // Fallback: si en 32s sigue SIN rider, reasignar
-  setTimeout(async () => {
-    const { data: pd } = await sb.from('pedidos').select('estatus,delivery_id').eq('id', data.id).single();
-    if(pd?.estatus === 'ASIGNADO' && pd?.delivery_id) {
-      // Verificar si la asignación expiró sin ser aceptada
-      const { data: asig } = await sb.from('asignaciones_pendientes')
-        .select('estatus').eq('pedido_id', data.id).eq('estatus','ENVIADO').maybeSingle();
-      if(asig) {
-        // Aún enviada, no fue aceptada — reasignar en cascada via función BD
-        await sb.rpc('reasignar_si_no_aceptado', {
-          p_pedido_id: data.id,
-          p_rider_anterior: pd.delivery_id
-        });
-      }
-    } // Si sigue PENDIENTE, Despacho lo asigna manualmente
-    
-  }, 32000);
+  // La reasignación por no-aceptación (AUTO) ahora la maneja el cron server-side
+  // 'procesar-asig-auto-vencidas' cada 10s. Las MANUAL no expiran.
   nav('pedidos');
 }
 
