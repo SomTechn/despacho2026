@@ -1302,6 +1302,16 @@ input,select,textarea{font-family:'Barlow',sans-serif;}
             <div id="r-desglose"></div>
           </div>
 
+          <!-- Asignación manual por-pedido -->
+          <div style="display:flex;align-items:center;gap:10px;background:var(--g2);border:1px solid var(--g4);border-radius:8px;padding:10px 12px;margin:0 0 12px">
+            <input type="checkbox" id="f-asignar-manual" onchange="S.asignarManual=this.checked"
+                   style="width:18px;height:18px;accent-color:var(--or);cursor:pointer">
+            <label for="f-asignar-manual" style="flex:1;cursor:pointer">
+              <div style="font-weight:700;font-size:13px">Asignar manualmente</div>
+              <div style="font-size:11px;color:var(--td)">El pedido queda PENDIENTE — tú eliges el repartidor (omite la asignación automática).</div>
+            </label>
+          </div>
+
           <div class="wiz-footer">
             <button class="btn btn-ghost" onclick="wizGo(2)">← Atrás</button>
             <button class="btn btn-primary" id="btn-guardar" onclick="guardarPedido()">💾 Guardar Pedido</button>
@@ -3612,33 +3622,17 @@ const CONCEPTOS_DEFAULT = ['Bono de Internet','Bono de Combustible','Bono Especi
 let _bonoRiderId = null;
 let _bonoRiderNombre = '';
 
-async function abrirModalBono(riderId, riderNombre) {
+function abrirModalBono(riderId, riderNombre) {
   _bonoRiderId = riderId;
   _bonoRiderNombre = riderNombre;
   // Cargar conceptos guardados + defaults
   const guardados = JSON.parse(localStorage.getItem('somar_conceptos_bono')||'[]');
   const todos = [...new Set([...CONCEPTOS_DEFAULT, ...guardados])];
   const optsHtml = todos.map(c => `<option value="${c}">${c}</option>`).join('');
-  // Cargar cuentas financieras (para depósito real)
-  if(!S._cuentasFin) {
-    const { data: ctas } = await sb.from('cuentas_financieras').select('id,nombre,icono').eq('activa',true).order('orden');
-    S._cuentasFin = ctas || [];
-  }
-  const ctaOpts = S._cuentasFin.map(c => `<option value="${c.id}">${c.icono||''} ${c.nombre}</option>`).join('');
 
   const html = `
     <div style="margin-bottom:14px">
       <div style="font-size:13px;color:var(--td);margin-bottom:12px">Rider: <strong>${riderNombre}</strong></div>
-      <div class="fg" style="margin-bottom:14px">
-        <label class="fl">Tipo de recarga *</label>
-        <select class="fi" id="bono-tipo" onchange="toggleTipoRecarga(this.value)">
-          <option value="promocional">🎁 Cortesía / Bono (no entró dinero real)</option>
-          <option value="real">🏦 Depósito real del rider (entró a caja)</option>
-        </select>
-        <div id="bono-tipo-hint" style="font-size:11px;color:var(--tm);margin-top:6px;line-height:1.4">
-          Saldo de cortesía: acredita saldo al rider pero <strong>no cuenta como ingreso</strong> de Somar ni suma a ninguna cuenta bancaria.
-        </div>
-      </div>
       <div class="form-grid">
         <div class="fg">
           <label class="fl">Concepto *</label>
@@ -3649,10 +3643,6 @@ async function abrirModalBono(riderId, riderNombre) {
         <div class="fg" id="bono-otro-wrap" style="display:none">
           <label class="fl">Nuevo concepto *</label>
           <input class="fi" id="bono-otro" placeholder="Nombre del concepto">
-        </div>
-        <div class="fg" id="bono-cuenta-wrap" style="display:none">
-          <label class="fl">Cuenta destino (entró aquí) *</label>
-          <select class="fi" id="bono-cuenta">${ctaOpts}</select>
         </div>
         <div class="fg">
           <label class="fl">Monto (L.) *</label>
@@ -3677,30 +3667,16 @@ function toggleOtroConcepto(val) {
   if(wrap) wrap.style.display = val === 'Otro' ? 'block' : 'none';
 }
 
-function toggleTipoRecarga(val) {
-  const esReal = val === 'real';
-  const ctaWrap = document.getElementById('bono-cuenta-wrap');
-  const hint = document.getElementById('bono-tipo-hint');
-  if(ctaWrap) ctaWrap.style.display = esReal ? 'block' : 'none';
-  if(hint) hint.innerHTML = esReal
-    ? 'Depósito real: el rider transfirió dinero que <strong>entró a la cuenta seleccionada</strong> y cuenta como ingreso a caja.'
-    : 'Saldo de cortesía: acredita saldo al rider pero <strong>no cuenta como ingreso</strong> de Somar ni suma a ninguna cuenta bancaria.';
-}
-
 async function guardarBono() {
   const conceptoSel = gv('bono-concepto');
   const conceptoFinal = conceptoSel === 'Otro' ? gv('bono-otro').trim() : conceptoSel;
   const monto = parseFloat(gv('bono-monto'));
   const nota  = gv('bono-nota');
-  const tipoRecarga = gv('bono-tipo') || 'promocional';
-  const esPromocional = tipoRecarga !== 'real';
-  const cuentaDestino = esPromocional ? null : parseInt(gv('bono-cuenta')||'0')||null;
   const fotoInput = document.getElementById('bono-foto');
   const fotoFile  = fotoInput?.files?.[0] || null;
 
   if(!conceptoFinal){ toast('El concepto es requerido','danger'); return; }
   if(!monto || monto <= 0){ toast('Ingresa un monto válido','danger'); return; }
-  if(!esPromocional && !cuentaDestino){ toast('Selecciona la cuenta destino del depósito real','danger'); return; }
 
   // Guardar concepto nuevo en localStorage para reutilizarlo
   if(conceptoSel === 'Otro' && conceptoFinal) {
@@ -3723,32 +3699,17 @@ async function guardarBono() {
     }
   }
 
-  const notaFinal = `${esPromocional?'[CORTESÍA] ':''}${conceptoFinal}${nota ? ' · '+nota : ''}`;
-
-  if(esPromocional) {
-    // Cortesía: inserción directa APROBADO. Solo acredita billetera (trigger de saldo),
-    // no genera movimiento de caja bancario (es_promocional lo bloquea).
-    const {error: depErr} = await sb.from('depositos_delivery').insert({
-      delivery_id: _bonoRiderId, monto, foto_url: fotoUrl, estatus: 'APROBADO',
-      es_promocional: true, cuenta_destino_id: null,
-      notas_despacho: notaFinal, aprobado_por: 'Despacho',
-      aprobado_at: new Date().toISOString()
-    });
-    if(depErr){ toast('Error al registrar cortesía: '+depErr.message,'danger'); return; }
-  } else {
-    // Depósito real: insertar PENDIENTE y luego aprobar (UPDATE) para disparar
-    // el trigger de caja que registra el ingreso a la cuenta bancaria.
-    const {data: depIns, error: insErr} = await sb.from('depositos_delivery').insert({
-      delivery_id: _bonoRiderId, monto, foto_url: fotoUrl, estatus: 'PENDIENTE',
-      es_promocional: false, cuenta_destino_id: cuentaDestino,
-      notas_despacho: notaFinal
-    }).select('id').single();
-    if(insErr){ toast('Error al registrar depósito: '+insErr.message,'danger'); return; }
-    const {error: aprErr} = await sb.from('depositos_delivery').update({
-      estatus: 'APROBADO', aprobado_por: 'Despacho', aprobado_at: new Date().toISOString()
-    }).eq('id', depIns.id);
-    if(aprErr){ toast('Error al aprobar depósito: '+aprErr.message,'danger'); return; }
-  }
+  // 1. Insertar en depositos_delivery con estatus APROBADO directamente
+  const {error: depErr} = await sb.from('depositos_delivery').insert({
+    delivery_id: _bonoRiderId,
+    monto,
+    foto_url: fotoUrl,
+    estatus: 'APROBADO',
+    notas_despacho: `${conceptoFinal}${nota ? ' · '+nota : ''}`,
+    aprobado_por: 'Despacho',
+    aprobado_at: new Date().toISOString()
+  });
+  if(depErr){ toast('Error al registrar bono: '+depErr.message,'danger'); return; }
 
   // 2. Actualizar saldo_billetera del rider — atómico vía RPC
   const { data: nuevoSaldo, error: updErr } = await sb.rpc('incrementar_saldo_billetera', {
@@ -4990,6 +4951,7 @@ async function guardarPedido() {
     agente:                   document.getElementById('u-name')?.textContent || 'Despacho',
     tipo:                     S.tipoPedido,
     estatus:                  'PENDIENTE',
+    asignar_manual:           !!S.asignarManual,
     metodo_pago:              S.metodoPago,
     // Referencias cruzadas — quien crea y qué cliente/comercio
     creado_por_id:            (await sb.auth.getUser())?.data?.user?.id || null,
@@ -5066,6 +5028,8 @@ async function guardarPedido() {
   const envioInp=document.getElementById('sv-envio-inp'); if(envioInp) envioInp.value='50';
   S.tarifaBase = null;
   S.tarifaManual = false;
+  S.asignarManual = false;
+  { const cbAM=document.getElementById('f-asignar-manual'); if(cbAM) cbAM.checked=false; }
   _wizCliSel=null; _wizComSel=null; _wizProductos=[]; _wizAllProds=[]; _wizCatsCache=[];
   document.getElementById('cli-seleccionado').style.display='none';
   document.getElementById('com-suc-grp').style.display='none';
