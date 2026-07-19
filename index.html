@@ -927,12 +927,6 @@ input,select,textarea{font-family:'Barlow',sans-serif;}
             <label style="font-size:10px;font-weight:700;color:var(--td);text-transform:uppercase;letter-spacing:.06em">Comercio</label>
             <input type="text" id="ped-fil-comercio" class="fi" style="padding:5px 8px;font-size:12px" placeholder="Nombre del comercio" oninput="debounceBuscarPedidos()">
           </div>
-          <div style="display:flex;flex-direction:column;gap:3px;flex:2;min-width:150px">
-            <label style="font-size:10px;font-weight:700;color:var(--td);text-transform:uppercase;letter-spacing:.06em">Repartidor</label>
-            <select id="ped-fil-rider" class="fi" style="padding:5px 8px;font-size:12px" onchange="renderTablaPedidos()">
-              <option value="">Todos</option>
-            </select>
-          </div>
           <div style="display:flex;gap:6px;align-items:flex-end">
             <button class="btn btn-primary btn-sm" onclick="buscarPedidosAvanzado()">Buscar</button>
             <button class="btn btn-ghost btn-sm" onclick="limpiarFiltrosPedidos()">✕ Limpiar</button>
@@ -948,14 +942,9 @@ input,select,textarea{font-family:'Barlow',sans-serif;}
             <table class="tbl">
               <thead><tr>
                 <th>N° Orden</th><th>Comercio / Tipo</th><th>Destino</th>
-                <th>Repartidor</th><th>Pago</th>
-                <th title="Tarifa de envío cobrada">Envío</th>
-                <th title="Comisión de Somar por el envío">Com. Envío</th>
-                <th title="Comisión de Somar por el producto">Com. Prod.</th>
-                <th title="Ingreso del repartidor">Rider</th>
-                <th>Estado</th><th>⏱ Tiempo</th><th></th>
+                <th>Repartidor</th><th>Pago</th><th>Tarifa</th><th>Estado</th><th>⏱ Tiempo</th><th></th>
               </tr></thead>
-              <tbody id="tbody-pedidos"><tr><td colspan="12" class="empty">Cargando...</td></tr></tbody>
+              <tbody id="tbody-pedidos"><tr><td colspan="8" class="empty">Cargando...</td></tr></tbody>
             </table>
           </div>
         </div>
@@ -1311,16 +1300,6 @@ input,select,textarea{font-family:'Barlow',sans-serif;}
             <div class="res-row"><span>Tarifa Envío</span><span id="r-envio">L. 50.00</span></div>
             <div class="res-row" style="font-size:14px;font-weight:800;border-top:1px solid var(--g4);padding-top:8px"><span>TOTAL A COBRAR</span><span id="r-total" style="color:var(--or)">L. 50.00</span></div>
             <div id="r-desglose"></div>
-          </div>
-
-          <!-- Asignación manual por-pedido -->
-          <div style="display:flex;align-items:center;gap:10px;background:var(--g2);border:1px solid var(--g4);border-radius:8px;padding:10px 12px;margin:0 0 12px">
-            <input type="checkbox" id="f-asignar-manual" onchange="S.asignarManual=this.checked"
-                   style="width:18px;height:18px;accent-color:var(--or);cursor:pointer">
-            <label for="f-asignar-manual" style="flex:1;cursor:pointer">
-              <div style="font-weight:700;font-size:13px">Asignar manualmente</div>
-              <div style="font-size:11px;color:var(--td)">El pedido queda PENDIENTE — tú eliges el repartidor (omite la asignación automática).</div>
-            </label>
           </div>
 
           <div class="wiz-footer">
@@ -2088,7 +2067,7 @@ function tickPanelTimer(ahora) {
   if(!p) return;
   // No actualizar timer si pedido está terminado
   if(['FINALIZADO','CANCELADO'].includes(p.estatus)) return;
-  const tsInicio = p.created_at || p.hora_asignado;
+  const tsInicio = p.hora_asignado || p.created_at;
   if(!tsInicio) return;
   const ms = ahora - new Date(tsInicio).getTime();
   const m = Math.floor(ms/60000), s = Math.floor((ms%60000)/1000);
@@ -2404,7 +2383,6 @@ function limpiarFiltrosPedidos() {
   document.getElementById('ped-hasta').value = '';
   document.getElementById('ped-fil-cliente').value = '';
   document.getElementById('ped-fil-comercio').value = '';
-  { const rs=document.getElementById('ped-fil-rider'); if(rs) rs.value=''; }
   document.getElementById('ped-modo-label').textContent = '';
   S._pedsFiltrados = null;
   renderTablaPedidos();
@@ -2459,14 +2437,12 @@ function filtPed(btn, f) {
 
 function renderTablaPedidos() {
   const q = (document.getElementById('ped-search')?.value || '').toLowerCase();
-  const riderFil = document.getElementById('ped-fil-rider')?.value || '';
   // Usar resultados filtrados de DB si hay búsqueda avanzada activa, si no la memoria local
   let peds = S._pedsFiltrados ?? S.pedidos;
   if(S.pedFiltro === 'eliminados')      peds = S._papelera || [];
   else if(S.pedFiltro === 'activos')    peds = peds.filter(p => FILTROS_ACTIVOS.includes(p.estatus));
   else if(S.pedFiltro === 'sinAsignar') peds = peds.filter(p => p.estatus === 'PENDIENTE');
   else if(S.pedFiltro !== 'todos')      peds = peds.filter(p => p.estatus === S.pedFiltro);
-  if(riderFil) peds = peds.filter(p => String(p.delivery_id) === String(riderFil));
   if(q) peds = peds.filter(p =>
     (p.no_orden||'').toLowerCase().includes(q) ||
     (p.nombre_comercio||'').toLowerCase().includes(q) ||
@@ -2476,41 +2452,23 @@ function renderTablaPedidos() {
   );
   document.getElementById('ped-count').textContent = `${peds.length} pedidos`;
   const tbody = document.getElementById('tbody-pedidos');
-  if(!peds.length) { tbody.innerHTML = '<tr><td colspan="12" class="empty">Sin resultados</td></tr>'; return; }
-
-  // Descomposición de ganancias por pedido
-  const desglose = p => {
-    const env   = parseFloat(p.tarifa_envio||0);
-    const rider = parseFloat(p.ingreso_delivery||0);
-    const somar = parseFloat(p.ingreso_somar||0);
-    const comEnv  = Math.max(+(env - rider).toFixed(2), 0);
-    const comProd = Math.max(+(somar - comEnv).toFixed(2), 0);
-    return {env, rider, comEnv, comProd};
-  };
-  // Solo suman a totales los pedidos FINALIZADOS (ganancia realizada)
-  let tEnv=0, tComEnv=0, tComProd=0, tRider=0;
-
-  const filas = peds.map(p => {
+  if(!peds.length) { tbody.innerHTML = '<tr><td colspan="8" class="empty">Sin resultados</td></tr>'; return; }
+  tbody.innerHTML = peds.map(p => {
     const rider = S.riders.find(r => r.id === p.delivery_id);
     const elim = p.eliminado === true;
-    const d = desglose(p);
-    if(p.estatus==='FINALIZADO' && !elim){ tEnv+=d.env; tComEnv+=d.comEnv; tComProd+=d.comProd; tRider+=d.rider; }
     return `<tr onclick="abrirModalPedido('${p.id}')" style="${elim?'opacity:.45':''}">
       <td class="mono" style="color:var(--or)">${elim?'🗑 ':''}${p.no_orden||'—'}</td>
       <td><div style="font-weight:600">${p.nombre_comercio||'—'}</div><div style="font-size:11px;color:var(--td)">${p.nombre_cliente||p.nombre_destinatario||''}</div></td>
       <td style="font-size:12px">${p.ciudad_destino||'—'}</td>
       <td style="font-size:12px">${rider ? rider.nombre : '<span style="color:var(--rojo);font-size:11px">Sin asignar</span>'}</td>
       <td style="font-size:11px">${p.metodo_pago||'—'}</td>
-      <td class="mono" style="color:var(--or)">L.${d.env.toFixed(0)}</td>
-      <td class="mono" style="color:var(--td)">L.${d.comEnv.toFixed(2)}</td>
-      <td class="mono" style="color:var(--td)">${d.comProd>0?'L.'+d.comProd.toFixed(2):'—'}</td>
-      <td class="mono" style="color:var(--az)">L.${d.rider.toFixed(2)}</td>
+      <td class="mono" style="color:var(--or)">L.${parseFloat(p.tarifa_envio||0).toFixed(0)}</td>
       <td>${chipEst(p.estatus, elim)}</td>
       <td style="font-size:11px">
-        ${p.created_at
+        ${p.hora_asignado
           ? ['FINALIZADO','CANCELADO'].includes(p.estatus)
-            ? `<span class="timer-badge" data-ts="${new Date(p.created_at).getTime()}" data-fin="${new Date(p.hora_finalizado||p.created_at).getTime()}">—</span>`
-            : `<span class="timer-badge" data-ts="${new Date(p.created_at).getTime()}">—</span>`
+            ? `<span class="timer-badge" data-ts="${new Date(p.hora_asignado).getTime()}" data-fin="${new Date(p.hora_finalizado||p.created_at).getTime()}">—</span>`
+            : `<span class="timer-badge" data-ts="${new Date(p.hora_asignado).getTime()}">—</span>`
           : '—'}
       </td>
       <td onclick="event.stopPropagation()" style="white-space:nowrap">
@@ -2521,18 +2479,6 @@ function renderTablaPedidos() {
       </td>
     </tr>`;
   }).join('');
-
-  // Fila de totales (solo finalizados) — útil al filtrar por repartidor
-  const totales = `<tr style="border-top:2px solid var(--g4);font-weight:700;background:var(--g2)">
-    <td colspan="5" style="text-align:right;color:var(--td);font-size:11px;text-transform:uppercase;letter-spacing:.05em">Totales (finalizados)</td>
-    <td class="mono" style="color:var(--or)">L.${tEnv.toFixed(0)}</td>
-    <td class="mono" style="color:var(--tx)">L.${tComEnv.toFixed(2)}</td>
-    <td class="mono" style="color:var(--tx)">L.${tComProd.toFixed(2)}</td>
-    <td class="mono" style="color:var(--az)">L.${tRider.toFixed(2)}</td>
-    <td colspan="3"></td>
-  </tr>`;
-
-  tbody.innerHTML = filas + totales;
 }
 
 // ─── PAPELERA: pedidos eliminados (solo ADMIN los recibe vía RLS) ───
@@ -2714,7 +2660,7 @@ function renderPanel(p) {
   document.getElementById('panel-estatus-chip').innerHTML = chipEst(p.estatus, p.eliminado);
 
   // Timer total
-  const tsInicio = p.created_at || p.hora_asignado;
+  const tsInicio = p.hora_asignado || p.created_at;
   const msTotal  = tsInicio ? ahora - new Date(tsInicio).getTime() : 0;
   const mT = Math.floor(msTotal/60000), sT = Math.floor((msTotal%60000)/1000);
   document.getElementById('panel-timer-total').textContent =
@@ -3079,9 +3025,8 @@ function renderPanel(p) {
 
 async function cancelarPedido(id) {
   const motivo = prompt('Motivo de cancelación:') || 'Cancelado por Despacho';
-  const { data, error } = await sb.rpc('cancelar_pedido_despacho', { p_pedido_id:id, p_motivo:motivo });
+  const { error } = await sb.from('pedidos').update({ estatus:'CANCELADO', observaciones:motivo }).eq('id', id);
   if(error) return toast('Error: ' + error.message, 'danger');
-  if(data && data.ok===false) return toast('No se pudo cancelar: '+(data.err||''), 'danger');
   closeModal('modal-pedido');
   toast('Pedido cancelado', 'ghost');
 }
@@ -3130,14 +3075,8 @@ async function confirmarAsig() {
   if(!S.selRiderId || !S.selPedidoId) return;
   const btn = document.getElementById('btn-confirm-asig');
   btn.disabled = true; btn.textContent = 'Asignando...';
-  // Asignación MANUAL: visible para el rider al menos N minutos (config minutos_visible_manual),
-  // aunque no esté dentro de la app en ese momento. Al expirar, un cron la libera a PENDIENTE.
-  let mins = 5;
-  try {
-    const {data:cfgM} = await sb.from('configuracion').select('valor').eq('clave','minutos_visible_manual').maybeSingle();
-    if(cfgM?.valor) mins = parseInt(cfgM.valor) || 5;
-  } catch(e){}
-  const expira = new Date(Date.now() + mins*60000).toISOString();
+  // Insertar en asignaciones_pendientes (el rider acepta o rechaza)
+  const expira = new Date(Date.now() + 30000).toISOString();
   // Eliminar asignaciones previas del mismo par pedido+rider (evita unique constraint)
   await sb.from('asignaciones_pendientes')
     .delete()
@@ -3152,7 +3091,6 @@ async function confirmarAsig() {
     pedido_id: S.selPedidoId,
     delivery_id: parseInt(S.selRiderId),
     estatus: 'ENVIADO',
-    metodo: 'MANUAL',
     expira_at: expira,
   });
   btn.textContent = 'Asignar Pedido'; btn.disabled = false;
@@ -3200,18 +3138,11 @@ async function cargarRiders() {
     });
     renderRidersMini();
     renderRidersGrid();
-    poblarSelectorRiderPedidos();
+    // Los riders pueden cargar DESPUÉS de renderListaActivos() (corren en
+    // paralelo dentro del Promise.all de init). Sin esto, la lista del
+    // dashboard pinta "Sin asignar" aunque el pedido sí tenga rider.
+    if(S.pedidos?.length) renderListaActivos();
   }
-}
-
-// Poblar el <select> de repartidor en el filtro de la sección Pedidos
-function poblarSelectorRiderPedidos() {
-  const sel = document.getElementById('ped-fil-rider');
-  if(!sel) return;
-  const actual = sel.value;
-  sel.innerHTML = '<option value="">Todos</option>' +
-    S.riders.map(r => `<option value="${r.id}">${r.nombre}</option>`).join('');
-  if(actual) sel.value = actual;   // conservar selección
 }
 
 function renderRidersMini() {
@@ -5014,7 +4945,6 @@ async function guardarPedido() {
     agente:                   document.getElementById('u-name')?.textContent || 'Despacho',
     tipo:                     S.tipoPedido,
     estatus:                  'PENDIENTE',
-    asignar_manual:           !!S.asignarManual,
     metodo_pago:              S.metodoPago,
     // Referencias cruzadas — quien crea y qué cliente/comercio
     creado_por_id:            (await sb.auth.getUser())?.data?.user?.id || null,
@@ -5091,8 +5021,6 @@ async function guardarPedido() {
   const envioInp=document.getElementById('sv-envio-inp'); if(envioInp) envioInp.value='50';
   S.tarifaBase = null;
   S.tarifaManual = false;
-  S.asignarManual = false;
-  { const cbAM=document.getElementById('f-asignar-manual'); if(cbAM) cbAM.checked=false; }
   _wizCliSel=null; _wizComSel=null; _wizProductos=[]; _wizAllProds=[]; _wizCatsCache=[];
   document.getElementById('cli-seleccionado').style.display='none';
   document.getElementById('com-suc-grp').style.display='none';
@@ -5110,8 +5038,23 @@ async function guardarPedido() {
   S.stepVals = { 'sv-prod':0, 'sv-envio':50, 'sv-propina':0 };
   ['sv-prod','sv-envio','sv-propina'].forEach(id=>{const el=document.getElementById(id);if(el)el.textContent=id==='sv-envio'?'50.00':'0.00';});
   wizGo(0);
-  // La reasignación por no-aceptación (AUTO) ahora la maneja el cron server-side
-  // 'procesar-asig-auto-vencidas' cada 10s. Las MANUAL no expiran.
+  // Fallback: si en 32s sigue SIN rider, reasignar
+  setTimeout(async () => {
+    const { data: pd } = await sb.from('pedidos').select('estatus,delivery_id').eq('id', data.id).single();
+    if(pd?.estatus === 'ASIGNADO' && pd?.delivery_id) {
+      // Verificar si la asignación expiró sin ser aceptada
+      const { data: asig } = await sb.from('asignaciones_pendientes')
+        .select('estatus').eq('pedido_id', data.id).eq('estatus','ENVIADO').maybeSingle();
+      if(asig) {
+        // Aún enviada, no fue aceptada — reasignar en cascada via función BD
+        await sb.rpc('reasignar_si_no_aceptado', {
+          p_pedido_id: data.id,
+          p_rider_anterior: pd.delivery_id
+        });
+      }
+    } // Si sigue PENDIENTE, Despacho lo asigna manualmente
+    
+  }, 32000);
   nav('pedidos');
 }
 
@@ -5919,6 +5862,13 @@ async function iniciarMapaZonas() {
         document.getElementById('zf-nombre')?.focus();
       }
     });
+    // Al terminar de editar, Leaflet.Draw deja los polígonos con su relleno
+    // por defecto (opaco). Restauramos el estilo transparente de cada zona.
+    ZM.mapa.on(L.Draw.Event.EDITED, () => {
+      Object.values(ZM.capas || {}).forEach(l => {
+        if(l._estiloZona) l.setStyle(l._estiloZona);
+      });
+    });
   }
 
   // Dibujar zonas existentes
@@ -5971,7 +5921,7 @@ async function zonaActivarDibujo() {
   // Activar herramienta de dibujo
   ZM._drawHandler = new L.Draw.Polygon(ZM.mapa, {
     allowIntersection: false,
-    shapeOptions: { color:'#FF8C00', fillOpacity:0.15, weight:2 }
+    shapeOptions: { color:'#FF8C00', fillColor:'#FF8C00', fillOpacity:0.12, weight:2, opacity:1 }
   });
   ZM._drawHandler.enable();
 }
@@ -6095,12 +6045,21 @@ function zonaRenderMapa() {
       const activo = z.activo !== false && z.activa !== false;
       const color  = z.color || '#FF8C00';
       const latlngs = coords.map(p=>L.latLng(p[0],p[1]));
-      const poly = L.polygon(latlngs, {
+      // Estilo transparente canónico de la zona. Se guarda en el layer para
+      // poder re-aplicarlo: Leaflet.Draw (y algunos hovers) reescriben el
+      // estilo con su relleno por defecto opaco, tapando el mapa.
+      const estiloZona = {
         color:       activo ? color : '#555',
         fillColor:   activo ? color : '#555',
         fillOpacity: 0.12,
+        opacity:     1,
         weight:      2,
-      });
+      };
+      const poly = L.polygon(latlngs, estiloZona);
+      poly._estiloZona = estiloZona;
+      // Si algo (edición, selección, hover) altera el relleno, lo devolvemos
+      // al estilo transparente en cuanto el usuario suelta el elemento.
+      poly.on('edit mouseout', () => poly.setStyle(poly._estiloZona));
       poly.bindTooltip(`<b>${z.nombre||z.sector}</b><br><span style="font-size:11px">${z.ciudad||''}</span>`, {
         sticky: true, className:'leaflet-tooltip'
       });
@@ -6538,7 +6497,7 @@ function renderKanban() {
   if(kb('kb-cnt-fin'))  kb('kb-cnt-fin').textContent  = (fin.length+canc.length) + ' pedido' + (fin.length!==1?'s':'');
   const card = (p, accentColor) => {
     const rider = S.riders.find(r=>r.id===p.delivery_id);
-    const ts = p.created_at;
+    const ts = p.hora_asignado || p.created_at;
     const hace = ts ? Math.round((Date.now()-new Date(ts).getTime())/60000) : null;
     const urgente = hace!==null && hace>20 && ['PENDIENTE','ASIGNADO'].includes(p.estatus);
     return `<div onclick="abrirModalPedido('${p.id}')" style="background:var(--g2);border:1px solid ${urgente?'var(--rojo)':accentColor+'33'};border-left:3px solid ${accentColor};border-radius:10px;padding:10px 11px;cursor:pointer;transition:all .15s;${urgente?'box-shadow:0 0 8px rgba(239,68,68,.3);':''}" onmouseover="this.style.background='var(--g3)'" onmouseout="this.style.background='var(--g2)'">
