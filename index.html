@@ -927,6 +927,12 @@ input,select,textarea{font-family:'Barlow',sans-serif;}
             <label style="font-size:10px;font-weight:700;color:var(--td);text-transform:uppercase;letter-spacing:.06em">Comercio</label>
             <input type="text" id="ped-fil-comercio" class="fi" style="padding:5px 8px;font-size:12px" placeholder="Nombre del comercio" oninput="debounceBuscarPedidos()">
           </div>
+          <div style="display:flex;flex-direction:column;gap:3px;flex:2;min-width:150px">
+            <label style="font-size:10px;font-weight:700;color:var(--td);text-transform:uppercase;letter-spacing:.06em">Repartidor</label>
+            <select id="ped-fil-rider" class="fi" style="padding:5px 8px;font-size:12px" onchange="renderTablaPedidos()">
+              <option value="">Todos</option>
+            </select>
+          </div>
           <div style="display:flex;gap:6px;align-items:flex-end">
             <button class="btn btn-primary btn-sm" onclick="buscarPedidosAvanzado()">Buscar</button>
             <button class="btn btn-ghost btn-sm" onclick="limpiarFiltrosPedidos()">✕ Limpiar</button>
@@ -942,9 +948,14 @@ input,select,textarea{font-family:'Barlow',sans-serif;}
             <table class="tbl">
               <thead><tr>
                 <th>N° Orden</th><th>Comercio / Tipo</th><th>Destino</th>
-                <th>Repartidor</th><th>Pago</th><th>Tarifa</th><th>Estado</th><th>⏱ Tiempo</th><th></th>
+                <th>Repartidor</th><th>Pago</th>
+                <th title="Tarifa de envío cobrada">Envío</th>
+                <th title="Comisión de Somar por el envío">Com. Envío</th>
+                <th title="Comisión de Somar por el producto">Com. Prod.</th>
+                <th title="Ingreso del repartidor">Rider</th>
+                <th>Estado</th><th>⏱ Tiempo</th><th></th>
               </tr></thead>
-              <tbody id="tbody-pedidos"><tr><td colspan="8" class="empty">Cargando...</td></tr></tbody>
+              <tbody id="tbody-pedidos"><tr><td colspan="12" class="empty">Cargando...</td></tr></tbody>
             </table>
           </div>
         </div>
@@ -2077,7 +2088,7 @@ function tickPanelTimer(ahora) {
   if(!p) return;
   // No actualizar timer si pedido está terminado
   if(['FINALIZADO','CANCELADO'].includes(p.estatus)) return;
-  const tsInicio = p.hora_asignado || p.created_at;
+  const tsInicio = p.created_at || p.hora_asignado;
   if(!tsInicio) return;
   const ms = ahora - new Date(tsInicio).getTime();
   const m = Math.floor(ms/60000), s = Math.floor((ms%60000)/1000);
@@ -2393,6 +2404,7 @@ function limpiarFiltrosPedidos() {
   document.getElementById('ped-hasta').value = '';
   document.getElementById('ped-fil-cliente').value = '';
   document.getElementById('ped-fil-comercio').value = '';
+  { const rs=document.getElementById('ped-fil-rider'); if(rs) rs.value=''; }
   document.getElementById('ped-modo-label').textContent = '';
   S._pedsFiltrados = null;
   renderTablaPedidos();
@@ -2447,12 +2459,14 @@ function filtPed(btn, f) {
 
 function renderTablaPedidos() {
   const q = (document.getElementById('ped-search')?.value || '').toLowerCase();
+  const riderFil = document.getElementById('ped-fil-rider')?.value || '';
   // Usar resultados filtrados de DB si hay búsqueda avanzada activa, si no la memoria local
   let peds = S._pedsFiltrados ?? S.pedidos;
   if(S.pedFiltro === 'eliminados')      peds = S._papelera || [];
   else if(S.pedFiltro === 'activos')    peds = peds.filter(p => FILTROS_ACTIVOS.includes(p.estatus));
   else if(S.pedFiltro === 'sinAsignar') peds = peds.filter(p => p.estatus === 'PENDIENTE');
   else if(S.pedFiltro !== 'todos')      peds = peds.filter(p => p.estatus === S.pedFiltro);
+  if(riderFil) peds = peds.filter(p => String(p.delivery_id) === String(riderFil));
   if(q) peds = peds.filter(p =>
     (p.no_orden||'').toLowerCase().includes(q) ||
     (p.nombre_comercio||'').toLowerCase().includes(q) ||
@@ -2462,23 +2476,41 @@ function renderTablaPedidos() {
   );
   document.getElementById('ped-count').textContent = `${peds.length} pedidos`;
   const tbody = document.getElementById('tbody-pedidos');
-  if(!peds.length) { tbody.innerHTML = '<tr><td colspan="8" class="empty">Sin resultados</td></tr>'; return; }
-  tbody.innerHTML = peds.map(p => {
+  if(!peds.length) { tbody.innerHTML = '<tr><td colspan="12" class="empty">Sin resultados</td></tr>'; return; }
+
+  // Descomposición de ganancias por pedido
+  const desglose = p => {
+    const env   = parseFloat(p.tarifa_envio||0);
+    const rider = parseFloat(p.ingreso_delivery||0);
+    const somar = parseFloat(p.ingreso_somar||0);
+    const comEnv  = Math.max(+(env - rider).toFixed(2), 0);
+    const comProd = Math.max(+(somar - comEnv).toFixed(2), 0);
+    return {env, rider, comEnv, comProd};
+  };
+  // Solo suman a totales los pedidos FINALIZADOS (ganancia realizada)
+  let tEnv=0, tComEnv=0, tComProd=0, tRider=0;
+
+  const filas = peds.map(p => {
     const rider = S.riders.find(r => r.id === p.delivery_id);
     const elim = p.eliminado === true;
+    const d = desglose(p);
+    if(p.estatus==='FINALIZADO' && !elim){ tEnv+=d.env; tComEnv+=d.comEnv; tComProd+=d.comProd; tRider+=d.rider; }
     return `<tr onclick="abrirModalPedido('${p.id}')" style="${elim?'opacity:.45':''}">
       <td class="mono" style="color:var(--or)">${elim?'🗑 ':''}${p.no_orden||'—'}</td>
       <td><div style="font-weight:600">${p.nombre_comercio||'—'}</div><div style="font-size:11px;color:var(--td)">${p.nombre_cliente||p.nombre_destinatario||''}</div></td>
       <td style="font-size:12px">${p.ciudad_destino||'—'}</td>
       <td style="font-size:12px">${rider ? rider.nombre : '<span style="color:var(--rojo);font-size:11px">Sin asignar</span>'}</td>
       <td style="font-size:11px">${p.metodo_pago||'—'}</td>
-      <td class="mono" style="color:var(--or)">L.${parseFloat(p.tarifa_envio||0).toFixed(0)}</td>
+      <td class="mono" style="color:var(--or)">L.${d.env.toFixed(0)}</td>
+      <td class="mono" style="color:var(--td)">L.${d.comEnv.toFixed(2)}</td>
+      <td class="mono" style="color:var(--td)">${d.comProd>0?'L.'+d.comProd.toFixed(2):'—'}</td>
+      <td class="mono" style="color:var(--az)">L.${d.rider.toFixed(2)}</td>
       <td>${chipEst(p.estatus, elim)}</td>
       <td style="font-size:11px">
-        ${p.hora_asignado
+        ${p.created_at
           ? ['FINALIZADO','CANCELADO'].includes(p.estatus)
-            ? `<span class="timer-badge" data-ts="${new Date(p.hora_asignado).getTime()}" data-fin="${new Date(p.hora_finalizado||p.created_at).getTime()}">—</span>`
-            : `<span class="timer-badge" data-ts="${new Date(p.hora_asignado).getTime()}">—</span>`
+            ? `<span class="timer-badge" data-ts="${new Date(p.created_at).getTime()}" data-fin="${new Date(p.hora_finalizado||p.created_at).getTime()}">—</span>`
+            : `<span class="timer-badge" data-ts="${new Date(p.created_at).getTime()}">—</span>`
           : '—'}
       </td>
       <td onclick="event.stopPropagation()" style="white-space:nowrap">
@@ -2489,6 +2521,18 @@ function renderTablaPedidos() {
       </td>
     </tr>`;
   }).join('');
+
+  // Fila de totales (solo finalizados) — útil al filtrar por repartidor
+  const totales = `<tr style="border-top:2px solid var(--g4);font-weight:700;background:var(--g2)">
+    <td colspan="5" style="text-align:right;color:var(--td);font-size:11px;text-transform:uppercase;letter-spacing:.05em">Totales (finalizados)</td>
+    <td class="mono" style="color:var(--or)">L.${tEnv.toFixed(0)}</td>
+    <td class="mono" style="color:var(--tx)">L.${tComEnv.toFixed(2)}</td>
+    <td class="mono" style="color:var(--tx)">L.${tComProd.toFixed(2)}</td>
+    <td class="mono" style="color:var(--az)">L.${tRider.toFixed(2)}</td>
+    <td colspan="3"></td>
+  </tr>`;
+
+  tbody.innerHTML = filas + totales;
 }
 
 // ─── PAPELERA: pedidos eliminados (solo ADMIN los recibe vía RLS) ───
@@ -2670,7 +2714,7 @@ function renderPanel(p) {
   document.getElementById('panel-estatus-chip').innerHTML = chipEst(p.estatus, p.eliminado);
 
   // Timer total
-  const tsInicio = p.hora_asignado || p.created_at;
+  const tsInicio = p.created_at || p.hora_asignado;
   const msTotal  = tsInicio ? ahora - new Date(tsInicio).getTime() : 0;
   const mT = Math.floor(msTotal/60000), sT = Math.floor((msTotal%60000)/1000);
   document.getElementById('panel-timer-total').textContent =
@@ -3035,8 +3079,9 @@ function renderPanel(p) {
 
 async function cancelarPedido(id) {
   const motivo = prompt('Motivo de cancelación:') || 'Cancelado por Despacho';
-  const { error } = await sb.from('pedidos').update({ estatus:'CANCELADO', observaciones:motivo }).eq('id', id);
+  const { data, error } = await sb.rpc('cancelar_pedido_despacho', { p_pedido_id:id, p_motivo:motivo });
   if(error) return toast('Error: ' + error.message, 'danger');
+  if(data && data.ok===false) return toast('No se pudo cancelar: '+(data.err||''), 'danger');
   closeModal('modal-pedido');
   toast('Pedido cancelado', 'ghost');
 }
@@ -3155,7 +3200,18 @@ async function cargarRiders() {
     });
     renderRidersMini();
     renderRidersGrid();
+    poblarSelectorRiderPedidos();
   }
+}
+
+// Poblar el <select> de repartidor en el filtro de la sección Pedidos
+function poblarSelectorRiderPedidos() {
+  const sel = document.getElementById('ped-fil-rider');
+  if(!sel) return;
+  const actual = sel.value;
+  sel.innerHTML = '<option value="">Todos</option>' +
+    S.riders.map(r => `<option value="${r.id}">${r.nombre}</option>`).join('');
+  if(actual) sel.value = actual;   // conservar selección
 }
 
 function renderRidersMini() {
@@ -6482,7 +6538,7 @@ function renderKanban() {
   if(kb('kb-cnt-fin'))  kb('kb-cnt-fin').textContent  = (fin.length+canc.length) + ' pedido' + (fin.length!==1?'s':'');
   const card = (p, accentColor) => {
     const rider = S.riders.find(r=>r.id===p.delivery_id);
-    const ts = p.hora_asignado || p.created_at;
+    const ts = p.created_at;
     const hace = ts ? Math.round((Date.now()-new Date(ts).getTime())/60000) : null;
     const urgente = hace!==null && hace>20 && ['PENDIENTE','ASIGNADO'].includes(p.estatus);
     return `<div onclick="abrirModalPedido('${p.id}')" style="background:var(--g2);border:1px solid ${urgente?'var(--rojo)':accentColor+'33'};border-left:3px solid ${accentColor};border-radius:10px;padding:10px 11px;cursor:pointer;transition:all .15s;${urgente?'box-shadow:0 0 8px rgba(239,68,68,.3);':''}" onmouseover="this.style.background='var(--g3)'" onmouseout="this.style.background='var(--g2)'">
