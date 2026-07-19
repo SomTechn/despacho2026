@@ -3085,8 +3085,14 @@ async function confirmarAsig() {
   if(!S.selRiderId || !S.selPedidoId) return;
   const btn = document.getElementById('btn-confirm-asig');
   btn.disabled = true; btn.textContent = 'Asignando...';
-  // Asignación MANUAL: no expira (persiste al rider hasta aceptar o reasignar)
-  const expira = '2099-12-31T23:59:59.000Z';
+  // Asignación MANUAL: visible para el rider al menos N minutos (config minutos_visible_manual),
+  // aunque no esté dentro de la app en ese momento. Al expirar, un cron la libera a PENDIENTE.
+  let mins = 5;
+  try {
+    const {data:cfgM} = await sb.from('configuracion').select('valor').eq('clave','minutos_visible_manual').maybeSingle();
+    if(cfgM?.valor) mins = parseInt(cfgM.valor) || 5;
+  } catch(e){}
+  const expira = new Date(Date.now() + mins*60000).toISOString();
   // Eliminar asignaciones previas del mismo par pedido+rider (evita unique constraint)
   await sb.from('asignaciones_pendientes')
     .delete()
