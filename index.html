@@ -931,6 +931,12 @@ input,select,textarea{font-family:'Barlow',sans-serif;}
             <label style="font-size:10px;font-weight:700;color:var(--td);text-transform:uppercase;letter-spacing:.06em">Comercio</label>
             <input type="text" id="ped-fil-comercio" class="fi" style="padding:5px 8px;font-size:12px" placeholder="Nombre del comercio" oninput="debounceBuscarPedidos()">
           </div>
+          <div style="display:flex;flex-direction:column;gap:3px;flex:2;min-width:150px">
+            <label style="font-size:10px;font-weight:700;color:var(--td);text-transform:uppercase;letter-spacing:.06em">Repartidor</label>
+            <select id="ped-fil-rider" class="fi" style="padding:5px 8px;font-size:12px" onchange="renderTablaPedidos()">
+              <option value="">Todos los riders</option>
+            </select>
+          </div>
           <div style="display:flex;gap:6px;align-items:flex-end">
             <button class="btn btn-primary btn-sm" onclick="buscarPedidosAvanzado()">Buscar</button>
             <button class="btn btn-ghost btn-sm" onclick="limpiarFiltrosPedidos()">✕ Limpiar</button>
@@ -946,9 +952,14 @@ input,select,textarea{font-family:'Barlow',sans-serif;}
             <table class="tbl">
               <thead><tr>
                 <th>N° Orden</th><th>Comercio / Tipo</th><th>Destino</th>
-                <th>Repartidor</th><th>Pago</th><th>Tarifa</th><th>Estado</th><th>⏱ Tiempo</th><th></th>
+                <th>Repartidor</th><th>Pago</th>
+                <th title="Tarifa de envío cobrada">Envío</th>
+                <th title="Comisión de Somar por el envío">Com. Envío</th>
+                <th title="Comisión de Somar por el producto">Com. Prod.</th>
+                <th title="Ingreso del repartidor">Rider</th>
+                <th>Estado</th><th>⏱ Tiempo</th><th></th>
               </tr></thead>
-              <tbody id="tbody-pedidos"><tr><td colspan="8" class="empty">Cargando...</td></tr></tbody>
+              <tbody id="tbody-pedidos"><tr><td colspan="12" class="empty">Cargando...</td></tr></tbody>
             </table>
           </div>
         </div>
@@ -1304,6 +1315,16 @@ input,select,textarea{font-family:'Barlow',sans-serif;}
             <div class="res-row"><span>Tarifa Envío</span><span id="r-envio">L. 50.00</span></div>
             <div class="res-row" style="font-size:14px;font-weight:800;border-top:1px solid var(--g4);padding-top:8px"><span>TOTAL A COBRAR</span><span id="r-total" style="color:var(--or)">L. 50.00</span></div>
             <div id="r-desglose"></div>
+          </div>
+
+          <!-- Asignación manual por-pedido -->
+          <div style="display:flex;align-items:center;gap:10px;background:var(--g2);border:1px solid var(--g4);border-radius:8px;padding:10px 12px;margin:0 0 12px">
+            <input type="checkbox" id="f-asignar-manual" onchange="S.asignarManual=this.checked"
+                   style="width:18px;height:18px;accent-color:var(--or);cursor:pointer">
+            <label for="f-asignar-manual" style="flex:1;cursor:pointer">
+              <div style="font-weight:700;font-size:13px">Asignar manualmente</div>
+              <div style="font-size:11px;color:var(--td)">El pedido queda PENDIENTE — tú eliges el repartidor (omite la asignación automática).</div>
+            </label>
           </div>
 
           <div class="wiz-footer">
@@ -2412,6 +2433,7 @@ function limpiarFiltrosPedidos() {
   document.getElementById('ped-hasta').value = '';
   document.getElementById('ped-fil-cliente').value = '';
   document.getElementById('ped-fil-comercio').value = '';
+  const rf = document.getElementById('ped-fil-rider'); if(rf) rf.value = '';
   document.getElementById('ped-modo-label').textContent = '';
   S._pedsFiltrados = null;
   renderTablaPedidos();
@@ -2466,12 +2488,14 @@ function filtPed(btn, f) {
 
 function renderTablaPedidos() {
   const q = (document.getElementById('ped-search')?.value || '').toLowerCase();
+  const riderFil = document.getElementById('ped-fil-rider')?.value || '';
   // Usar resultados filtrados de DB si hay búsqueda avanzada activa, si no la memoria local
   let peds = S._pedsFiltrados ?? S.pedidos;
   if(S.pedFiltro === 'eliminados')      peds = S._papelera || [];
   else if(S.pedFiltro === 'activos')    peds = peds.filter(p => FILTROS_ACTIVOS.includes(p.estatus));
   else if(S.pedFiltro === 'sinAsignar') peds = peds.filter(p => p.estatus === 'PENDIENTE');
   else if(S.pedFiltro !== 'todos')      peds = peds.filter(p => p.estatus === S.pedFiltro);
+  if(riderFil) peds = peds.filter(p => String(p.delivery_id) === String(riderFil));
   if(q) peds = peds.filter(p =>
     (p.no_orden||'').toLowerCase().includes(q) ||
     (p.nombre_comercio||'').toLowerCase().includes(q) ||
@@ -2481,23 +2505,48 @@ function renderTablaPedidos() {
   );
   document.getElementById('ped-count').textContent = `${peds.length} pedidos`;
   const tbody = document.getElementById('tbody-pedidos');
-  if(!peds.length) { tbody.innerHTML = '<tr><td colspan="8" class="empty">Sin resultados</td></tr>'; return; }
+  if(!peds.length) { tbody.innerHTML = '<tr><td colspan="12" class="empty">Sin resultados</td></tr>'; return; }
+
+  // Descomposición de ganancias por pedido:
+  //   Com. Envío  = tarifa_envio − ingreso_delivery  (lo que Somar retiene del envío)
+  //   Com. Prod.  = ingreso_somar − Com. Envío        (resto: comisión sobre el producto)
+  const desglose = p => {
+    const env   = parseFloat(p.tarifa_envio||0);
+    const rider = parseFloat(p.ingreso_delivery||0);
+    const somar = parseFloat(p.ingreso_somar||0);
+    const comEnv  = Math.max(+(env - rider).toFixed(2), 0);
+    const comProd = Math.max(+(somar - comEnv).toFixed(2), 0);
+    return {env, rider, comEnv, comProd};
+  };
+  // Solo suman a totales los pedidos FINALIZADOS no eliminados (ganancia realizada)
+  let tEnv=0, tComEnv=0, tComProd=0, tRider=0, nFin=0;
+
+  const fL0 = v => 'L.'+parseFloat(v||0).toFixed(0);
+
   tbody.innerHTML = peds.map(p => {
     const rider = S.riders.find(r => r.id === p.delivery_id);
     const elim = p.eliminado === true;
+    const d = desglose(p);
+    if(p.estatus==='FINALIZADO' && !elim){ tEnv+=d.env; tComEnv+=d.comEnv; tComProd+=d.comProd; tRider+=d.rider; nFin++; }
+    // Timer basado en created_at (tiempo total desde creación del pedido)
+    const tsIni = p.created_at ? new Date(p.created_at).getTime() : null;
+    const tsFin = ['FINALIZADO','CANCELADO'].includes(p.estatus) ? new Date(p.hora_finalizado||p.created_at).getTime() : null;
     return `<tr onclick="abrirModalPedido('${p.id}')" style="${elim?'opacity:.45':''}">
       <td class="mono" style="color:var(--or)">${elim?'🗑 ':''}${p.no_orden||'—'}</td>
       <td><div style="font-weight:600">${p.nombre_comercio||'—'}</div><div style="font-size:11px;color:var(--td)">${p.nombre_cliente||p.nombre_destinatario||''}</div></td>
       <td style="font-size:12px">${p.ciudad_destino||'—'}</td>
       <td style="font-size:12px">${rider ? rider.nombre : '<span style="color:var(--rojo);font-size:11px">Sin asignar</span>'}</td>
       <td style="font-size:11px">${p.metodo_pago||'—'}</td>
-      <td class="mono" style="color:var(--or)">L.${parseFloat(p.tarifa_envio||0).toFixed(0)}</td>
+      <td class="mono" style="font-size:12px">${fL0(d.env)}</td>
+      <td class="mono" style="font-size:12px;color:var(--or)">${fL0(d.comEnv)}</td>
+      <td class="mono" style="font-size:12px;color:#F59E0B">${fL0(d.comProd)}</td>
+      <td class="mono" style="font-size:12px;color:var(--verde)">${fL0(d.rider)}</td>
       <td>${chipEst(p.estatus, elim)}</td>
       <td style="font-size:11px">
-        ${p.hora_asignado
-          ? ['FINALIZADO','CANCELADO'].includes(p.estatus)
-            ? `<span class="timer-badge" data-ts="${new Date(p.hora_asignado).getTime()}" data-fin="${new Date(p.hora_finalizado||p.created_at).getTime()}">—</span>`
-            : `<span class="timer-badge" data-ts="${new Date(p.hora_asignado).getTime()}">—</span>`
+        ${tsIni
+          ? tsFin
+            ? `<span class="timer-badge" data-ts="${tsIni}" data-fin="${tsFin}">—</span>`
+            : `<span class="timer-badge" data-ts="${tsIni}">—</span>`
           : '—'}
       </td>
       <td onclick="event.stopPropagation()" style="white-space:nowrap">
@@ -2507,19 +2556,28 @@ function renderTablaPedidos() {
         ${btnEliminar('pedidos', p.id, elim?'cargarPapelera':'cargarMetricas', elim)}
       </td>
     </tr>`;
-  }).join('');
+  }).join('')
+  // Fila de totales (solo cuenta pedidos finalizados no eliminados)
+  + (nFin > 0 ? `<tr style="background:rgba(255,140,0,.06);font-weight:700;border-top:2px solid var(--g5)">
+      <td colspan="5" style="text-align:right;font-size:11px;color:var(--td)">TOTALES · ${nFin} finalizado${nFin!==1?'s':''} →</td>
+      <td class="mono" style="font-size:12px">${fL0(tEnv)}</td>
+      <td class="mono" style="font-size:12px;color:var(--or)">${fL0(tComEnv)}</td>
+      <td class="mono" style="font-size:12px;color:#F59E0B">${fL0(tComProd)}</td>
+      <td class="mono" style="font-size:12px;color:var(--verde)">${fL0(tRider)}</td>
+      <td colspan="3"></td>
+    </tr>` : '');
 }
 
 // ─── PAPELERA: pedidos eliminados (solo ADMIN los recibe vía RLS) ───
 async function cargarPapelera(){
   const tbody = document.getElementById('tbody-pedidos');
-  if(tbody) tbody.innerHTML = '<tr><td colspan="8" class="empty">Cargando papelera…</td></tr>';
+  if(tbody) tbody.innerHTML = '<tr><td colspan="12" class="empty">Cargando papelera…</td></tr>';
   const { data, error } = await sb.from('pedidos')
     .select('*').eq('eliminado', true)
     .order('eliminado_at', { ascending:false }).limit(200);
   if(error){
     toast('Error al cargar papelera: '+error.message,'danger');
-    if(tbody) tbody.innerHTML = '<tr><td colspan="8" class="empty">Error</td></tr>';
+    if(tbody) tbody.innerHTML = '<tr><td colspan="12" class="empty">Error</td></tr>';
     return;
   }
   S._papelera = data || [];
@@ -3054,7 +3112,10 @@ function renderPanel(p) {
 
 async function cancelarPedido(id) {
   const motivo = prompt('Motivo de cancelación:') || 'Cancelado por Despacho';
-  const { error } = await sb.from('pedidos').update({ estatus:'CANCELADO', observaciones:motivo }).eq('id', id);
+  // RPC robusto: funciona en cualquier estado, preserva delivery_id
+  // temporalmente para que el Realtime notifique al rider, y marca el
+  // pedido como CANCELADO + eliminado=true.
+  const { error } = await sb.rpc('cancelar_pedido_despacho', { p_pedido_id: id, p_motivo: motivo });
   if(error) return toast('Error: ' + error.message, 'danger');
   closeModal('modal-pedido');
   toast('Pedido cancelado', 'ghost');
@@ -3167,11 +3228,25 @@ async function cargarRiders() {
     });
     renderRidersMini();
     renderRidersGrid();
+    poblarFiltroRiderPedidos();
     // Los riders pueden cargar DESPUÉS de renderListaActivos() (corren en
     // paralelo dentro del Promise.all de init). Sin esto, la lista del
     // dashboard pinta "Sin asignar" aunque el pedido sí tenga rider.
     if(S.pedidos?.length) renderListaActivos();
   }
+}
+
+// Llena el <select> de filtro por rider en la sección Pedidos,
+// preservando la selección actual del usuario.
+function poblarFiltroRiderPedidos() {
+  const sel = document.getElementById('ped-fil-rider');
+  if(!sel) return;
+  const prev = sel.value;
+  const opts = (S.riders||[]).slice()
+    .sort((a,b)=>(a.nombre||'').localeCompare(b.nombre||''))
+    .map(r=>`<option value="${r.id}">${r.nombre||('Rider '+r.id)}</option>`).join('');
+  sel.innerHTML = '<option value="">Todos los riders</option>' + opts;
+  if(prev) sel.value = prev;
 }
 
 function renderRidersMini() {
@@ -5327,6 +5402,7 @@ async function guardarPedido() {
     agente:                   document.getElementById('u-name')?.textContent || 'Despacho',
     tipo:                     S.tipoPedido,
     estatus:                  'PENDIENTE',
+    asignar_manual:           !!S.asignarManual,
     metodo_pago:              S.metodoPago,
     // Referencias cruzadas — quien crea y qué cliente/comercio
     creado_por_id:            (await sb.auth.getUser())?.data?.user?.id || null,
@@ -5419,6 +5495,9 @@ async function guardarPedido() {
   const pctEl=document.getElementById('f-pct-comision'); if(pctEl)pctEl.value='0';
   S.stepVals = { 'sv-prod':0, 'sv-envio':50, 'sv-propina':0 };
   ['sv-prod','sv-envio','sv-propina'].forEach(id=>{const el=document.getElementById(id);if(el)el.textContent=id==='sv-envio'?'50.00':'0.00';});
+  // Resetear bandera de asignación manual
+  S.asignarManual = false;
+  const chkMan=document.getElementById('f-asignar-manual'); if(chkMan)chkMan.checked=false;
   wizGo(0);
   // Fallback: si en 32s sigue SIN rider, reasignar
   setTimeout(async () => {
@@ -8441,6 +8520,7 @@ function nav(v, pushHistory=true) {
     // Prellenar "hasta" con hoy si está vacío
     const hastaEl = document.getElementById('ped-hasta');
     if(hastaEl && !hastaEl.value) hastaEl.value = fechaHN();
+    poblarFiltroRiderPedidos();
     renderTablaPedidos();
   }
   if(v === 'kanban') renderKanban();
