@@ -699,6 +699,10 @@ input,select,textarea{font-family:'Barlow',sans-serif;}
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg>
         Caja &amp; Cuentas
       </div>
+      <div class="nav-item" id="nav-fin-cxx" onclick="nav('fin-cxx')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M3 12h18M3 18h18"/><circle cx="8" cy="6" r="1.5" fill="currentColor"/><circle cx="16" cy="18" r="1.5" fill="currentColor"/></svg>
+        Cuentas x Cobrar/Pagar
+      </div>
       <div class="nav-item" onclick="window.open('./contabilidad.html?v=1','_blank')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 7h6M9 11h6M9 15h4"/><rect x="4" y="3" width="16" height="18" rx="2"/></svg>
         Contabilidad
@@ -1752,6 +1756,31 @@ input,select,textarea{font-family:'Barlow',sans-serif;}
         </div>
       </div>
 
+      <!-- ═══ CUENTAS POR COBRAR / PAGAR ═══════════════════════ -->
+      <div class="view" id="view-fin-cxx">
+        <div style="font-size:13px;color:var(--td);margin-bottom:14px">Saldos pendientes: lo que Somar debe (por pagar) y lo que le deben (por cobrar).</div>
+        <!-- Totales globales -->
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:18px">
+          <div class="metric"><div class="metric-lbl">Por Pagar (debo)</div><div class="metric-val" id="cxx-tot-pagar" style="color:var(--rojo)">L. 0.00</div><div style="font-size:10px;color:var(--td)" id="cxx-cnt-pagar">—</div></div>
+          <div class="metric"><div class="metric-lbl">Por Cobrar (me deben)</div><div class="metric-val" id="cxx-tot-cobrar" style="color:var(--verde)">L. 0.00</div><div style="font-size:10px;color:var(--td)" id="cxx-cnt-cobrar">—</div></div>
+          <div class="metric"><div class="metric-lbl">Neto</div><div class="metric-val" id="cxx-tot-neto" style="color:var(--or)">L. 0.00</div><div style="font-size:10px;color:var(--td)">saldo neto</div></div>
+        </div>
+        <!-- Filtros -->
+        <div class="filter-bar" style="margin-bottom:12px">
+          <button class="fbtn active" onclick="filtCxx(this,'todos')">Todos</button>
+          <button class="fbtn" onclick="filtCxx(this,'POR_PAGAR')">Por pagar</button>
+          <button class="fbtn" onclick="filtCxx(this,'POR_COBRAR')">Por cobrar</button>
+        </div>
+        <div class="card">
+          <div class="tbl-wrap">
+            <table class="tbl">
+              <thead><tr><th>Contraparte</th><th>Tipo</th><th>Concepto</th><th>Naturaleza</th><th>Saldo</th><th>Acción</th></tr></thead>
+              <tbody id="cxx-tbody"><tr><td colspan="6" class="empty">Cargando...</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
       <!-- ═══ CHAT ══════════════════════════════════════════════ -->
       <div class="view" id="view-chat" style="height:calc(100vh - 52px);overflow:hidden;padding:0;flex-direction:column;">
         <div class="chat-layout" id="chat-layout">
@@ -1983,7 +2012,7 @@ sb.auth.getSession().then(({ data: { session } }) => {
 // INIT
 // ════════════════════════════════════════════════════════════
 // Vistas con información financiera sensible (márgenes, utilidad, take rate)
-const VISTAS_SOLO_ADMIN = ['fin-dashboard','fin-egresos','fin-ingresos','fin-cuentas'];
+const VISTAS_SOLO_ADMIN = ['fin-dashboard','fin-egresos','fin-ingresos','fin-cuentas','fin-cxx'];
 
 async function init() {
   // Papelera visible solo para ADMIN (ambos caminos de login pasan por aquí)
@@ -3372,6 +3401,18 @@ async function abrirDetalleRider(riderId) {
         </div>
       </div>
 
+      <!-- GANANCIAS (Mi Guaca) -->
+      <div id="mr-ganancias-${d.id}" style="margin-bottom:18px">
+        <div style="font-size:11px;color:var(--or);font-weight:700;letter-spacing:1px;margin-bottom:8px">GANANCIAS</div>
+        <div class="empty" style="padding:14px;font-size:12px">Cargando ganancias…</div>
+      </div>
+
+      <!-- CUENTAS POR COBRAR / PAGAR -->
+      <div id="mr-cuentas-${d.id}" style="margin-bottom:18px">
+        <div style="font-size:11px;color:var(--or);font-weight:700;letter-spacing:1px;margin-bottom:8px">CUENTAS (SALDOS PENDIENTES)</div>
+        <div class="empty" style="padding:14px;font-size:12px">Cargando cuentas…</div>
+      </div>
+
       <!-- DATOS PERSONALES -->
       <div style="margin-bottom:18px">
         <div style="font-size:11px;color:var(--or);font-weight:700;letter-spacing:1px;margin-bottom:8px">DATOS PERSONALES</div>
@@ -3484,14 +3525,355 @@ async function abrirDetalleRider(riderId) {
         </div>
       </div>
     `;
+
+    // Cargas asíncronas (no bloquean el render del modal)
+    cargarGananciasRider(riderId);
+    cargarCuentasRider(riderId);
   } catch(e) {
     console.error('[abrirDetalleRider]', e);
     cuerpo.innerHTML = '<div class="empty">Error: '+e.message+'</div>';
   }
 }
 
+// ── Ganancias del rider (resumen tipo Mi Guaca) ──────────────────
+async function cargarGananciasRider(riderId) {
+  const cont = document.getElementById('mr-ganancias-'+riderId);
+  if(!cont) return;
+  const { data: peds } = await sb.from('pedidos')
+    .select('ingreso_delivery,propina,hora_finalizado')
+    .eq('eliminado',false).eq('delivery_id',riderId).eq('estatus','FINALIZADO')
+    .order('hora_finalizado',{ascending:false}).limit(500);
+  const fin = peds || [];
+  const hoyIni = new Date(); hoyIni.setHours(0,0,0,0);
+  const ayerIni = new Date(hoyIni); ayerIni.setDate(ayerIni.getDate()-1);
+  const ayerFin = new Date(hoyIni.getTime()-1);
+  const lunSem  = new Date(hoyIni); lunSem.setDate(lunSem.getDate()-((lunSem.getDay()+6)%7));
+  const mesIni  = new Date(hoyIni.getFullYear(), hoyIni.getMonth(), 1);
+  let tHoy=0,pH=0,tAyer=0,pA=0,tSem=0,pS=0,tMes=0,pM=0;
+  fin.forEach(p=>{
+    const g = parseFloat(p.ingreso_delivery||0)+parseFloat(p.propina||0);
+    const ts = new Date(p.hora_finalizado||0).getTime();
+    if(ts>=hoyIni.getTime()){tHoy+=g;pH++;}
+    if(ts>=ayerIni.getTime()&&ts<=ayerFin.getTime()){tAyer+=g;pA++;}
+    if(ts>=lunSem.getTime()){tSem+=g;pS++;}
+    if(ts>=mesIni.getTime()){tMes+=g;pM++;}
+  });
+  const card=(lbl,val,ped,col)=>`<div style="background:rgba(255,255,255,.03);border:1px solid var(--g4);border-radius:10px;padding:10px 8px">
+      <div style="font-size:9px;color:var(--td);letter-spacing:.3px;text-transform:uppercase">${lbl}</div>
+      <div style="font-size:17px;font-weight:800;color:${col};font-family:'Space Mono',monospace">L. ${val.toFixed(2)}</div>
+      <div style="font-size:9px;color:var(--td)">${ped} pedido${ped!==1?'s':''}</div>
+    </div>`;
+  cont.innerHTML = `
+    <div style="font-size:11px;color:var(--or);font-weight:700;letter-spacing:1px;margin-bottom:8px">GANANCIAS</div>
+    <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px">
+      ${card('Hoy',tHoy,pH,'var(--verde)')}
+      ${card('Ayer',tAyer,pA,'var(--tx)')}
+      ${card('Esta semana',tSem,pS,'var(--tx)')}
+      ${card('Este mes',tMes,pM,'var(--or)')}
+    </div>`;
+}
+
+// ── Cuentas por cobrar / pagar del rider ─────────────────────────
+async function cargarCuentasRider(riderId) {
+  const cont = document.getElementById('mr-cuentas-'+riderId);
+  if(!cont) return;
+  try {
+    const { data: saldoData } = await sb.rpc('cxx_saldo_rider', { p_rider_id: riderId });
+    const { data: cuentas } = await sb.from('v_cuentas_pendientes_todas')
+      .select('*').eq('rider_id', riderId).order('creado_at',{ascending:false});
+    const nombreRider = (S.riders.find(r=>r.id===riderId)||{}).nombre || '';
+    cont.innerHTML = renderCuentasBloque(saldoData, cuentas||[], 'rider', riderId, nombreRider);
+  } catch(e) {
+    cont.innerHTML = `<div style="font-size:11px;color:var(--or);font-weight:700;letter-spacing:1px;margin-bottom:8px">CUENTAS (SALDOS PENDIENTES)</div>
+      <div class="empty" style="padding:10px;font-size:11px">No se pudieron cargar las cuentas: ${e.message}</div>`;
+  }
+}
+
+// ── Render compartido del bloque de cuentas (rider o cliente) ────
+function renderCuentasBloque(saldo, cuentas, tipoContraparte, contraparteId, nombre) {
+  const s = saldo || {por_pagar:0,por_cobrar:0,neto:0};
+  const porPagar  = parseFloat(s.por_pagar||0);   // Somar debe
+  const porCobrar = parseFloat(s.por_cobrar||0);   // le deben a Somar
+  const neto      = parseFloat(s.neto||0);
+  const TIPO_LBL = {
+    LIQUIDACION:'Liquidación pendiente', COBRO_CLIENTE:'Cobro sin comprobante',
+    EFECTIVO_PRODUCTO:'Efectivo por depositar', PRESTAMO:'Préstamo',
+    SALDO_CLIENTE:'Saldo a favor', FALTANTE_CLIENTE:'Faltante', OTRO:'Otro'
+  };
+  // Resumen neto: si neto>0 Somar debe a la contraparte; si <0, la contraparte debe a Somar
+  const netoTxt = neto === 0 ? 'Sin saldo pendiente'
+    : neto > 0 ? `Somar debe L. ${neto.toFixed(2)}`
+               : `Le debe a Somar L. ${Math.abs(neto).toFixed(2)}`;
+  const netoCol = neto === 0 ? 'var(--td)' : neto > 0 ? 'var(--rojo)' : 'var(--verde)';
+
+  const filas = (cuentas||[]).map(c => {
+    const esPagar = c.naturaleza === 'POR_PAGAR';
+    const col = esPagar ? 'var(--rojo)' : 'var(--verde)';
+    const signo = esPagar ? '−' : '+';
+    // Solo las cuentas físicas (fuente CUENTA) admiten abono/neteo manual;
+    // las liquidaciones se gestionan en su módulo propio.
+    const abonable = c.fuente === 'CUENTA';
+    return `<div style="display:flex;align-items:center;gap:8px;padding:9px 10px;border-bottom:1px solid var(--g4)">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:12px;font-weight:700;color:${col}">${signo} L. ${parseFloat(c.saldo||0).toFixed(2)}
+            <span style="font-size:10px;color:var(--td);font-weight:500">· ${TIPO_LBL[c.tipo]||c.tipo}</span></div>
+          <div style="font-size:10px;color:var(--td);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${c.concepto||'—'}</div>
+        </div>
+        ${abonable ? `<button class="btn btn-ghost btn-sm" style="flex:0 0 auto;padding:4px 8px;font-size:11px" onclick="abrirAbonoCuenta('${c.id}','${tipoContraparte}',${JSON.stringify(contraparteId)})">Abonar</button>` : `<span style="font-size:9px;color:var(--td)">módulo Liquidaciones</span>`}
+      </div>`;
+  }).join('') || '<div class="empty" style="padding:10px;font-size:11px">Sin cuentas pendientes</div>';
+
+  const btnNeteo = (tipoContraparte==='rider' && porPagar>0 && porCobrar>0)
+    ? `<button class="btn btn-primary btn-sm" style="width:100%;justify-content:center;margin-top:8px" onclick="netearRider(${JSON.stringify(contraparteId)})">⚖️ Netear (compensar L. ${Math.min(porPagar,porCobrar).toFixed(2)})</button>`
+    : '';
+  const btnNueva = `<button class="btn btn-ghost btn-sm" style="width:100%;justify-content:center;margin-top:6px" onclick="abrirNuevaCuenta('${tipoContraparte}',${JSON.stringify(contraparteId)},${JSON.stringify(nombre||'')})">+ Registrar deuda manual</button>`;
+
+  return `
+    <div style="font-size:11px;color:var(--or);font-weight:700;letter-spacing:1px;margin-bottom:8px">CUENTAS (SALDOS PENDIENTES)</div>
+    <div style="background:rgba(255,255,255,.02);border:1px solid var(--g4);border-radius:10px;overflow:hidden">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--g4)">
+        <div style="background:var(--g2);padding:10px;text-align:center">
+          <div style="font-size:9px;color:var(--td);letter-spacing:.3px">POR PAGAR (debo)</div>
+          <div style="font-size:15px;font-weight:800;color:var(--rojo);font-family:'Space Mono',monospace">L. ${porPagar.toFixed(2)}</div>
+        </div>
+        <div style="background:var(--g2);padding:10px;text-align:center">
+          <div style="font-size:9px;color:var(--td);letter-spacing:.3px">POR COBRAR (me deben)</div>
+          <div style="font-size:15px;font-weight:800;color:var(--verde);font-family:'Space Mono',monospace">L. ${porCobrar.toFixed(2)}</div>
+        </div>
+      </div>
+      <div style="padding:8px 10px;text-align:center;background:var(--g1);border-top:1px solid var(--g4)">
+        <span style="font-size:12px;font-weight:700;color:${netoCol}">${netoTxt}</span>
+      </div>
+      <div>${filas}</div>
+    </div>
+    ${btnNeteo}
+    ${btnNueva}`;
+}
+
 function cerrarDetalleRider() {
   document.getElementById('modal-rider').style.display = 'none';
+}
+
+// ═══════════════════════════════════════════════════════════════
+// CUENTAS POR COBRAR / PAGAR — acciones
+// ═══════════════════════════════════════════════════════════════
+let _cxxCtx = null; // contexto de la cuenta que se está abonando
+
+async function abrirAbonoCuenta(cuentaId, tipoContraparte, contraparteId) {
+  // Cargar datos de la cuenta y cuentas financieras
+  const { data: cta } = await sb.from('cuentas_pendientes').select('*').eq('id', cuentaId).single();
+  if(!cta) { toast('Cuenta no encontrada','danger'); return; }
+  const { data: ctasFin } = await sb.from('cuentas_financieras').select('id,nombre,icono').eq('activa',true).order('orden');
+  _cxxCtx = { cuentaId, tipoContraparte, contraparteId };
+  const esPagar = cta.naturaleza === 'POR_PAGAR';
+  const optsCuenta = (ctasFin||[]).map(c=>`<option value="${c.id}">${c.icono||''} ${c.nombre}</option>`).join('');
+  const html = `
+    <div style="margin-bottom:14px">
+      <div style="font-size:12px;color:var(--td);margin-bottom:10px">
+        ${esPagar ? 'Somar paga (egreso de caja)' : 'Somar recibe (ingreso a caja)'} ·
+        Saldo actual: <strong style="color:${esPagar?'var(--rojo)':'var(--verde)'}">L. ${parseFloat(cta.saldo).toFixed(2)}</strong>
+      </div>
+      <div class="form-grid">
+        <div class="fg">
+          <label class="fl">Monto a abonar (L.) *</label>
+          <input class="fi" id="ab-monto" type="number" min="0.01" step="0.01" max="${cta.saldo}" value="${parseFloat(cta.saldo).toFixed(2)}">
+        </div>
+        <div class="fg">
+          <label class="fl">Cuenta ${esPagar?'de origen (de dónde sale)':'destino (a dónde entra)'} *</label>
+          <select class="fi" id="ab-cuenta"><option value="">— Selecciona cuenta —</option>${optsCuenta}</select>
+        </div>
+        <div class="fg">
+          <label class="fl">Nota (opcional)</label>
+          <input class="fi" id="ab-nota" placeholder="Referencia o comentario">
+        </div>
+      </div>
+      <div style="font-size:10px;color:var(--td);margin-top:6px">El movimiento se registrará en Caja & Cuentas automáticamente.</div>
+    </div>`;
+  document.getElementById('md-titulo').textContent = 'Registrar Abono';
+  document.getElementById('md-cuerpo').innerHTML = html;
+  document.getElementById('modal-datos').style.display = 'flex';
+  const mdg = document.getElementById('md-guardar');
+  mdg.style.display='flex';
+  mdg.onclick = async (e)=>{ e.stopPropagation(); mdg.disabled=true; mdg.textContent='⏳...';
+    try{ await guardarAbono(); }catch(err){ toast('Error: '+err.message,'danger'); }
+    mdg.disabled=false; mdg.textContent='💾 Guardar'; };
+}
+
+async function guardarAbono() {
+  const monto  = parseFloat(gv('ab-monto'));
+  const cuenta = gv('ab-cuenta');
+  const nota   = gv('ab-nota');
+  if(!monto || monto <= 0){ toast('Monto inválido','danger'); return; }
+  if(!cuenta){ toast('Selecciona la cuenta','danger'); return; }
+  const { error } = await sb.rpc('cxx_abonar', {
+    p_cuenta_id: _cxxCtx.cuentaId, p_monto: monto,
+    p_metodo: 'CAJA', p_cuenta_caja_id: parseInt(cuenta),
+    p_concepto: nota, p_por: document.getElementById('u-name')?.textContent||'Despacho'
+  });
+  if(error){ toast('Error: '+error.message,'danger'); return; }
+  toast('✅ Abono registrado','success');
+  cerrarModalDatos();
+  // Refrescar el bloque de cuentas del contexto
+  if(_cxxCtx.tipoContraparte==='rider') cargarCuentasRider(_cxxCtx.contraparteId);
+  else cargarCuentasCliente(_cxxCtx.contraparteId);
+  if(document.getElementById('view-fin-cxx')?.classList.contains('active')) cargarCxx();
+}
+
+async function netearRider(riderId) {
+  if(!confirm('¿Compensar automáticamente lo que Somar debe con lo que el rider debe?\n\nEsto no mueve dinero de caja, solo salda las deudas entre sí.')) return;
+  const { data, error } = await sb.rpc('cxx_netear_rider', { p_rider_id: riderId, p_por: document.getElementById('u-name')?.textContent||'Despacho' });
+  if(error){ toast('Error: '+error.message,'danger'); return; }
+  toast(`✅ Neteado L. ${parseFloat(data?.neteado||0).toFixed(2)}`,'success');
+  cargarCuentasRider(riderId);
+}
+
+// Registrar deuda manual (préstamo a rider, saldo a favor / faltante de cliente)
+async function abrirNuevaCuenta(tipoContraparte, contraparteId, nombre) {
+  _cxxCtx = { tipoContraparte, contraparteId };
+  const esRider = tipoContraparte === 'rider';
+  const tipos = esRider
+    ? [['PRESTAMO','POR_COBRAR','Préstamo (el rider me deberá)']]
+    : [['SALDO_CLIENTE','POR_PAGAR','Saldo a favor (le debo al cliente)'],
+       ['FALTANTE_CLIENTE','POR_COBRAR','Faltante (el cliente me debe)']];
+  const opts = tipos.map(([t,n,l])=>`<option value="${t}|${n}">${l}</option>`).join('');
+  const html = `
+    <div style="margin-bottom:14px">
+      <div style="font-size:12px;color:var(--td);margin-bottom:10px">${esRider?'Rider':'Cliente'}: <strong>${nombre||'—'}</strong></div>
+      <div class="form-grid">
+        <div class="fg"><label class="fl">Tipo *</label><select class="fi" id="nc-tipo">${opts}</select></div>
+        <div class="fg"><label class="fl">Monto (L.) *</label><input class="fi" id="nc-monto" type="number" min="0.01" step="0.01" placeholder="0.00"></div>
+        <div class="fg"><label class="fl">Concepto / motivo *</label><input class="fi" id="nc-concepto" placeholder="Ej: adelanto para compra de producto"></div>
+      </div>
+    </div>`;
+  document.getElementById('md-titulo').textContent = 'Registrar Deuda Manual';
+  document.getElementById('md-cuerpo').innerHTML = html;
+  document.getElementById('modal-datos').style.display = 'flex';
+  const mdg = document.getElementById('md-guardar');
+  mdg.style.display='flex';
+  mdg.onclick = async (e)=>{ e.stopPropagation(); mdg.disabled=true; mdg.textContent='⏳...';
+    try{ await guardarNuevaCuenta(); }catch(err){ toast('Error: '+err.message,'danger'); }
+    mdg.disabled=false; mdg.textContent='💾 Guardar'; };
+}
+
+async function guardarNuevaCuenta() {
+  const [tipo, naturaleza] = (gv('nc-tipo')||'').split('|');
+  const monto = parseFloat(gv('nc-monto'));
+  const concepto = gv('nc-concepto');
+  if(!tipo){ toast('Selecciona el tipo','danger'); return; }
+  if(!monto || monto<=0){ toast('Monto inválido','danger'); return; }
+  if(!concepto){ toast('El concepto es requerido','danger'); return; }
+  const esRider = _cxxCtx.tipoContraparte==='rider';
+  const row = {
+    naturaleza, contraparte: esRider?'RIDER':'CLIENTE', tipo,
+    monto_original: monto, saldo: monto, concepto,
+    origen:'MANUAL', creado_por: document.getElementById('u-name')?.textContent||'Despacho',
+    [esRider?'rider_id':'cliente_id']: _cxxCtx.contraparteId
+  };
+  const { error } = await sb.from('cuentas_pendientes').insert(row);
+  if(error){ toast('Error: '+error.message,'danger'); return; }
+  toast('✅ Deuda registrada','success');
+  cerrarModalDatos();
+  if(esRider) cargarCuentasRider(_cxxCtx.contraparteId);
+  else cargarCuentasCliente(_cxxCtx.contraparteId);
+  if(document.getElementById('view-fin-cxx')?.classList.contains('active')) cargarCxx();
+}
+
+// ── Módulo independiente CxC/CxP ─────────────────────────────────
+let _cxxFiltro = 'todos';
+let _cxxData = [];
+
+async function cargarCxx() {
+  const tb = document.getElementById('cxx-tbody');
+  if(tb) tb.innerHTML = '<tr><td colspan="6" class="empty">Cargando...</td></tr>';
+  // Traer todas las cuentas abiertas (vista unificada) + nombres de contraparte
+  const { data: cuentas, error } = await sb.from('v_cuentas_pendientes_todas')
+    .select('*').order('creado_at',{ascending:false});
+  if(error){ if(tb) tb.innerHTML = `<tr><td colspan="6" class="empty">Error: ${error.message}</td></tr>`; return; }
+  // Resolver nombres: riders desde S.riders; clientes con una consulta
+  const cliIds = [...new Set((cuentas||[]).filter(c=>c.cliente_id).map(c=>c.cliente_id))];
+  let cliMap = {};
+  if(cliIds.length){
+    const { data: clis } = await sb.from('clientes').select('id,nombre').in('id',cliIds);
+    (clis||[]).forEach(c=>cliMap[c.id]=c.nombre);
+  }
+  _cxxData = (cuentas||[]).map(c=>({
+    ...c,
+    _nombre: c.rider_id ? ((S.riders.find(r=>r.id===c.rider_id)||{}).nombre || 'Rider '+c.rider_id)
+                        : (cliMap[c.cliente_id] || 'Cliente')
+  }));
+  // Totales
+  const totPagar  = _cxxData.filter(c=>c.naturaleza==='POR_PAGAR').reduce((s,c)=>s+parseFloat(c.saldo||0),0);
+  const totCobrar = _cxxData.filter(c=>c.naturaleza==='POR_COBRAR').reduce((s,c)=>s+parseFloat(c.saldo||0),0);
+  const cntPagar  = _cxxData.filter(c=>c.naturaleza==='POR_PAGAR').length;
+  const cntCobrar = _cxxData.filter(c=>c.naturaleza==='POR_COBRAR').length;
+  const setTxt=(id,v)=>{const e=document.getElementById(id);if(e)e.textContent=v;};
+  setTxt('cxx-tot-pagar','L. '+totPagar.toFixed(2));
+  setTxt('cxx-tot-cobrar','L. '+totCobrar.toFixed(2));
+  setTxt('cxx-tot-neto','L. '+(totPagar-totCobrar).toFixed(2));
+  setTxt('cxx-cnt-pagar',cntPagar+' cuenta'+(cntPagar!==1?'s':''));
+  setTxt('cxx-cnt-cobrar',cntCobrar+' cuenta'+(cntCobrar!==1?'s':''));
+  renderCxxTabla();
+}
+
+function filtCxx(btn, f) {
+  document.querySelectorAll('#view-fin-cxx .filter-bar .fbtn').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  _cxxFiltro = f;
+  renderCxxTabla();
+}
+
+// ── Cuentas del cliente (modal) ──────────────────────────────────
+let _cxxClienteActual = null;
+function abrirCuentasCliente(clienteId, nombre) {
+  _cxxClienteActual = { id: clienteId, nombre };
+  document.getElementById('md-titulo').textContent = 'Cuentas · ' + nombre;
+  document.getElementById('md-cuerpo').innerHTML = `<div id="cli-cuentas-wrap"><div class="empty" style="padding:16px">Cargando cuentas…</div></div>`;
+  document.getElementById('modal-datos').style.display = 'flex';
+  // El modal de cuentas no usa el botón Guardar
+  const mdg = document.getElementById('md-guardar');
+  if(mdg) mdg.style.display = 'none';
+  cargarCuentasCliente(clienteId);
+}
+
+async function cargarCuentasCliente(clienteId) {
+  const wrap = document.getElementById('cli-cuentas-wrap');
+  const nombre = _cxxClienteActual?.nombre || '';
+  try {
+    const { data: saldoData } = await sb.rpc('cxx_saldo_cliente', { p_cliente_id: clienteId });
+    const { data: cuentas } = await sb.from('v_cuentas_pendientes_todas')
+      .select('*').eq('cliente_id', clienteId).order('creado_at',{ascending:false});
+    if(wrap) wrap.innerHTML = renderCuentasBloque(saldoData, cuentas||[], 'cliente', clienteId, nombre);
+  } catch(e) {
+    if(wrap) wrap.innerHTML = `<div class="empty" style="padding:12px">Error: ${e.message}</div>`;
+  }
+}
+
+function renderCxxTabla() {
+  const tb = document.getElementById('cxx-tbody');
+  if(!tb) return;
+  const TIPO_LBL = {LIQUIDACION:'Liquidación pendiente',COBRO_CLIENTE:'Cobro sin comprobante',
+    EFECTIVO_PRODUCTO:'Efectivo por depositar',PRESTAMO:'Préstamo',SALDO_CLIENTE:'Saldo a favor',
+    FALTANTE_CLIENTE:'Faltante',OTRO:'Otro'};
+  let rows = _cxxData;
+  if(_cxxFiltro!=='todos') rows = rows.filter(c=>c.naturaleza===_cxxFiltro);
+  if(!rows.length){ tb.innerHTML = '<tr><td colspan="6" class="empty">Sin cuentas pendientes</td></tr>'; return; }
+  tb.innerHTML = rows.map(c=>{
+    const esPagar = c.naturaleza==='POR_PAGAR';
+    const col = esPagar?'var(--rojo)':'var(--verde)';
+    const abonable = c.fuente==='CUENTA';
+    const tipoContraparte = c.rider_id ? 'rider' : 'cliente';
+    const cpId = c.rider_id ? c.rider_id : `'${c.cliente_id}'`;
+    return `<tr>
+      <td>${c.rider_id?'🛵':'👤'} ${c._nombre}</td>
+      <td style="font-size:12px">${TIPO_LBL[c.tipo]||c.tipo}</td>
+      <td style="font-size:11px;color:var(--td);max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${c.concepto||'—'}</td>
+      <td><span style="font-size:10px;font-weight:700;color:${col}">${esPagar?'POR PAGAR':'POR COBRAR'}</span></td>
+      <td class="mono" style="color:${col};font-weight:700">L. ${parseFloat(c.saldo||0).toFixed(2)}</td>
+      <td>${abonable
+        ? `<button class="btn btn-ghost btn-sm" style="padding:4px 10px;font-size:11px" onclick="abrirAbonoCuenta('${c.id}','${tipoContraparte}',${cpId})">Abonar</button>`
+        : `<span style="font-size:10px;color:var(--td)">Liquidaciones</span>`}</td>
+    </tr>`;
+  }).join('');
 }
 
 async function toggleActivoRider(riderId, nuevoEstado) {
@@ -7111,6 +7493,7 @@ function renderClientes() {
         ${c.celular?'<a href="https://wa.me/504'+c.celular.replace(/\D/g,'')+'" target="_blank" class="btn btn-ghost btn-sm" style="color:#22C55E;text-decoration:none">💬 WA</a>':''}
         <button class="btn btn-ghost btn-sm" onclick="abrirUbicacionesCliente('${c.id}','${c.nombre.replace(/'/g,"\\'")}')">📍 Ubic.</button>
         <button class="btn btn-ghost btn-sm" onclick="verPedidosCliente('${c.nombre.replace(/'/g,"\\'")}')">📋 Ped.</button>
+        <button class="btn btn-ghost btn-sm" onclick="abrirCuentasCliente('${c.id}','${c.nombre.replace(/'/g,"\\'")}')">💰 Cuentas</button>
         <button class="btn btn-ghost btn-sm" onclick="editarDesdeCache('cliente','${c.id}')">✏️</button>
         ${btnEliminar('clientes', c.id, 'cargarClientes', c.eliminado)}
       </div>
@@ -8012,7 +8395,7 @@ function abrirAsignarRider(dId) {
 // ════════════════════════════════════════════════════════════
 // NAVEGACIÓN
 // ════════════════════════════════════════════════════════════
-var TITLES = { inicio:'Dashboard',pedidos:'Pedidos',kanban:'Kanban — Vista de Pedidos',config:'Configuración del Sistema',nuevo:'Nuevo Pedido',mapa:'Mapa en Vivo',riders:'Riders',solicitudes:'Solicitudes de Riders',solcom:'Solicitudes de Comercios',depositos:'Depósitos',liquidaciones:'Liquidaciones a Riders',turnos:'Gestión de Turnos',comprobantes:'Comprobantes de Pago',historial:'Historial',chat:'Chat',clientes:'Clientes',comercios:'Comercios',categorias:'Tipos de Comercio (Categorías)',productos:'Productos',cupones:'Cupones de Descuento',usuarios:'Usuarios del Sistema','fin-dashboard':'Dashboard Financiero','fin-egresos':'Egresos','fin-ingresos':'Ingresos Extras','fin-cuentas':'Caja & Cuentas' };
+var TITLES = { inicio:'Dashboard',pedidos:'Pedidos',kanban:'Kanban — Vista de Pedidos',config:'Configuración del Sistema',nuevo:'Nuevo Pedido',mapa:'Mapa en Vivo',riders:'Riders',solicitudes:'Solicitudes de Riders',solcom:'Solicitudes de Comercios',depositos:'Depósitos',liquidaciones:'Liquidaciones a Riders',turnos:'Gestión de Turnos',comprobantes:'Comprobantes de Pago',historial:'Historial',chat:'Chat',clientes:'Clientes',comercios:'Comercios',categorias:'Tipos de Comercio (Categorías)',productos:'Productos',cupones:'Cupones de Descuento',usuarios:'Usuarios del Sistema','fin-dashboard':'Dashboard Financiero','fin-egresos':'Egresos','fin-ingresos':'Ingresos Extras','fin-cuentas':'Caja & Cuentas','fin-cxx':'Cuentas por Cobrar / Pagar' };
 
 async function refreshApp() {
   const btn = document.getElementById('tb-refresh-btn');
@@ -8097,6 +8480,7 @@ function nav(v, pushHistory=true) {
   if(v === 'fin-egresos')   { cargarEgresos(); abrirModalEgreso().then(()=>document.getElementById('modal-egreso').style.display='none'); }
   if(v === 'fin-ingresos')  cargarIngresosExtras();
   if(v === 'fin-cuentas')   cargarCuentas();
+  if(v === 'fin-cxx')       cargarCxx();
   closeSB();
 }
 
