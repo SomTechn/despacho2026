@@ -1975,6 +1975,91 @@ function sonarPedidoFinalizado() {
   vibrar([80,40,80,40,250]);
 }
 
+// Cambio discreto de estado — una nota corta
+function sonarCambio() {
+  beep(520, 0.14, 0.20, 'sine');
+  vibrar([60]);
+}
+
+// ════════════════════════════════════════════════════════════
+// NOTIFICACIONES — locales, disparadas por Realtime
+// Toda alerta al usuario pasa por aqui: un solo punto de entrada
+// alimentado por la tabla notificaciones_despacho.
+// ════════════════════════════════════════════════════════════
+const ICONO_SOMAR = 'https://res.cloudinary.com/drkaxsziu/image/upload/v1767871213/Somar_Express_2048_x_2048_px_18_x_18_in__20250623_221102_0000_o0bv7a.png';
+let SONIDO_ON = localStorage.getItem('somar_sonido') !== '0';
+let SW_REG = null;
+let SIN_LEER = 0;
+const TITULO_BASE = 'Somar Despacho';
+
+// Contador en el titulo de la pestana mientras no estas mirando
+function marcarPestana(cant) {
+  SIN_LEER = cant === 0 ? 0 : SIN_LEER + cant;
+  document.title = SIN_LEER > 0 ? `(${SIN_LEER}) ${TITULO_BASE}` : TITULO_BASE;
+}
+document.addEventListener('visibilitychange', () => { if(!document.hidden) marcarPestana(0); });
+window.addEventListener('focus', () => marcarPestana(0));
+
+function pedirPermisoNotif() {
+  if(!('Notification' in window)) return;
+  if(Notification.permission === 'default') Notification.requestPermission();
+}
+
+// Notificacion del sistema operativo. Android exige pasarla por el
+// service worker; en escritorio funciona directa. Probamos SW primero.
+async function notificarSistema(titulo, texto, data) {
+  if(!('Notification' in window) || Notification.permission !== 'granted') return;
+  const ops = {
+    body: texto || '',
+    tag: 'somar-' + ((data && data.notif_id) || Date.now()),
+    renotify: true,
+    icon: ICONO_SOMAR,
+    badge: ICONO_SOMAR,
+    vibrate: [200,100,200],
+    requireInteraction: !!(data && data.urgente),
+    data: data || {}
+  };
+  try {
+    const reg = SW_REG || (navigator.serviceWorker && await navigator.serviceWorker.getRegistration());
+    if(reg && reg.showNotification) { reg.showNotification(titulo, ops); return; }
+  } catch(e) {}
+  try { new Notification(titulo, ops); } catch(e) {}
+}
+
+function sonarNotif(nt) {
+  if(!SONIDO_ON) return;
+  const t = nt.tipo, est = (nt.data || {}).estatus;
+  if(t === 'PEDIDO_PENDIENTE') return sonarPedidoNuevo();
+  if(t === 'CHAT')             return sonarMensajeChat();
+  if(t === 'PEDIDO_ESTATUS')   return est === 'FINALIZADO' ? sonarPedidoFinalizado() : sonarCambio();
+  if(t === 'TURNO' || t === 'ASIGNACION') return sonarCambio();
+  return sonarDeposito();
+}
+
+// Punto unico de entrada: sonido + aviso en pantalla + notificacion del SO
+function manejarNotifDespacho(nt) {
+  if(!nt) return;
+  S.notifs = [nt, ...(S.notifs || [])].slice(0, 50);
+  renderBadgeNotifs();
+  if(S.showNotifs) renderNotifsPanel();
+
+  const data    = nt.data || {};
+  const urgente = nt.tipo === 'PEDIDO_PENDIENTE' || nt.tipo === 'FACTURA' || data.urgente === true;
+  const titulo  = (nt.icono ? nt.icono + ' ' : '') + (nt.titulo || 'Somar Express');
+
+  sonarNotif(nt);
+  notif(titulo, nt.cuerpo || '', urgente);
+  notificarSistema(titulo, nt.cuerpo || '', Object.assign({}, data, { notif_id: nt.id, tipo: nt.tipo, urgente }));
+  if(document.hidden) marcarPestana(1);
+}
+
+function toggleSonido() {
+  SONIDO_ON = !SONIDO_ON;
+  localStorage.setItem('somar_sonido', SONIDO_ON ? '1' : '0');
+  renderNotifsPanel();
+  toast(SONIDO_ON ? '🔊 Sonido activado' : '🔇 Sonido silenciado');
+}
+
 // ════════════════════════════════════════════════════════════
 // AUTH
 // ════════════════════════════════════════════════════════════
@@ -2136,6 +2221,7 @@ function tickPanelTimer(ahora) {
 // ════════════════════════════════════════════════════════════
 function initRealtime() {
   // Conectar WebSocket solo después de tener sesión autenticada
+  pedirPermisoNotif();
   sb.realtime.connect();
   sb.channel('despacho-main')
     .on('postgres_changes', { event: '*', schema: 'public', table: 'pedidos' }, p => {
@@ -2144,8 +2230,6 @@ function initRealtime() {
     .on('postgres_changes', { event: '*', schema: 'public', table: 'depositos_delivery' }, p => {
       if(p.eventType === 'INSERT' && p.new.estatus === 'PENDIENTE') {
         badgeInc('badge-dep');
-        notif('💳 Depósito recibido', 'Un repartidor envió comprobante', false);
-        sonarDeposito();
       }
       if(document.getElementById('view-depositos').classList.contains('active')) cargarDepositos(S.solFiltro || 'PENDIENTE');
     else { const b=document.getElementById('badge-dep'); if(b&&p.eventType==='INSERT') b.textContent=parseInt(b.textContent||0)+1; }
@@ -2167,21 +2251,19 @@ function initRealtime() {
       }
     })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'aplicaciones_delivery' }, p => {
-      if(p.eventType === 'INSERT') { badgeInc('badge-sol'); notif('🏍 Nueva solicitud de rider', p.new.nombre, false); }
+      if(p.eventType === 'INSERT') badgeInc('badge-sol');
       if(document.getElementById('view-solicitudes').classList.contains('active')) cargarSolicitudes(S.solFiltro);
     })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'solicitudes_comercios' }, p => {
       if(p.eventType === 'INSERT') {
         const b = document.getElementById('badge-solcom');
         if(b) { b.textContent = parseInt(b.textContent||0)+1; b.style.display='inline'; }
-        notif('🏪 Nueva solicitud de comercio', p.new.nombre_comercial || 'Sin nombre', false);
       }
       if(document.getElementById('view-solcom').classList.contains('active')) cargarSolicitudesComercios(S.solComFiltro);
     })
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'liquidaciones_delivery' }, p => {
       const b = document.getElementById('badge-liq');
       if(b) { b.textContent = parseInt(b.textContent||0)+1; b.style.display='inline'; }
-      notif('💳 Nueva liquidación pendiente', `L. ${parseFloat(p.new?.monto_liquidar||0).toFixed(2)} por transferir`, false);
       if(document.getElementById('view-liquidaciones').classList.contains('active')) cargarLiquidaciones('PENDIENTE');
     })
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'chat_mensajes' }, p => {
@@ -2189,11 +2271,11 @@ function initRealtime() {
         const badge = document.getElementById('badge-chat');
         badge.style.display = 'inline';
         badge.textContent = parseInt(badge.textContent || '0') + 1;
-        const rider = S.riders.find(r => r.id === p.new.delivery_id);
-        notif('💬 ' + (rider?.nombre || 'Rider'), p.new.mensaje, false);
-        sonarMensajeChat();
         if(S.chatRiderId === p.new.delivery_id) renderChatMsgs(p.new.delivery_id);
       }
+    })
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'notificaciones_despacho' }, p => {
+      manejarNotifDespacho(p.new);
     })
     .subscribe(status => {
       const ok = status === 'SUBSCRIBED';
@@ -2215,22 +2297,9 @@ function onPedidoChange(payload) {
   if(document.getElementById('view-kanban').classList.contains('active')) renderKanban();
   if(S.mapInit) actualizarPedidosEnMapa();
   renderListaActivos();
-  if(p.estatus === 'PENDIENTE') {
-    notif('⚠️ Pedido sin asignar', `${p.no_orden||'—'} requiere asignación manual`, true);
-    badgeInc('badge-activos');
-    sonarPedidoNuevo();
-  }
-  if(p.estatus === 'ACEPTADO') {
-    notif('✅ Pedido aceptado', `${p.no_orden||'—'} fue aceptado por el rider`, false);
-  }
-  if(p.estatus === 'FINALIZADO') {
-    sonarPedidoFinalizado();
-    notif('🏁 Pedido finalizado', `${p.no_orden||'—'} entregado`, false);
-  }
+  if(p.estatus === 'PENDIENTE') badgeInc('badge-activos');
   // Notificacion cuando el rider sube la factura
   if(payload.eventType === 'UPDATE' && payload.new?.foto_factura_url && !payload.old?.foto_factura_url) {
-    sonarDeposito();
-    notif('📷 Factura recibida — revisar', `${p.no_orden||'—'} · L. ${parseFloat(p.monto_pagado_en_comercio||0).toFixed(2)} · Requiere aprobación`, true);
     const bFac = document.getElementById('badge-facturas');
     if(bFac) { bFac.textContent = parseInt(bFac.textContent||0)+1; bFac.style.display='inline'; }
   }
@@ -8166,7 +8235,10 @@ function renderNotifsPanel() {
   panel.innerHTML = `
     <div style="padding:12px 14px;border-bottom:1px solid var(--g4);display:flex;justify-content:space-between;align-items:center">
       <div style="font-size:13px;font-weight:700">🔔 Notificaciones</div>
-      <button onclick="limpiarNotifs()" style="background:none;border:none;color:var(--or);font-size:11px;font-weight:700;cursor:pointer">Limpiar</button>
+      <div style="display:flex;gap:10px;align-items:center">
+        <button onclick="toggleSonido()" title="${SONIDO_ON?'Sonido activado':'Sonido silenciado'}" style="background:none;border:none;font-size:14px;cursor:pointer;opacity:${SONIDO_ON?1:.45}">${SONIDO_ON?'🔊':'🔇'}</button>
+        <button onclick="limpiarNotifs()" style="background:none;border:none;color:var(--or);font-size:11px;font-weight:700;cursor:pointer">Limpiar</button>
+      </div>
     </div>
     <div style="overflow-y:auto;flex:1;max-height:400px">
       ${(S.notifs||[]).length===0
@@ -9101,6 +9173,7 @@ if('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('despacho-sw.js')
       .then(reg => {
+        SW_REG = reg;
         console.log('[SW] Despacho registrado:', reg.scope);
         // Forzar actualización inmediata si hay nueva versión
         reg.addEventListener('updatefound', () => {
